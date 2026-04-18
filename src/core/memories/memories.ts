@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
+import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -123,20 +124,11 @@ export class Memories {
   }
 
   private vectorRecall(qv: number[], limit: number, scope?: string): RecallHit[] {
-    const sql = `
-      SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-             m.source, m.created_at, m.updated_at, v.distance AS distance
-      FROM memories_vec v
-      JOIN memories m ON m.id = v.rowid
-      LEFT JOIN scopes s ON s.id = m.scope_id
-      WHERE v.embedding MATCH ?
-        AND k = ?
-        ${scope ? 'AND s.name = ?' : ''}
-      ORDER BY v.distance
-    `;
-    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
-    if (scope) params.push(scope);
-    const rows = this.db.raw.prepare(sql).all(...params) as (MemoryRow & { distance: number })[];
+    const sql = scope ? VECTOR_RECALL_SCOPED : VECTOR_RECALL_UNSCOPED;
+    const stmt = cached(this.db.raw, sql);
+    const rows = (scope
+      ? stmt.all(VectorIndex.queryBlob(qv), limit, scope)
+      : stmt.all(VectorIndex.queryBlob(qv), limit)) as (MemoryRow & { distance: number })[];
     return rows.map((r) => ({
       memory: rowToMemory(r),
       score: 1 / (1 + r.distance),
@@ -162,21 +154,11 @@ export class Memories {
   }
 
   private ftsRecall(ftsQuery: string, limit: number, scope?: string): RecallHit[] {
-    const sql = `
-      SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-             m.source, m.created_at, m.updated_at, f.rank AS rank
-      FROM memories_fts f
-      JOIN memories m ON m.id = f.rowid
-      LEFT JOIN scopes s ON s.id = m.scope_id
-      WHERE memories_fts MATCH ?
-        ${scope ? 'AND s.name = ?' : ''}
-      ORDER BY f.rank
-      LIMIT ?
-    `;
-    const params: unknown[] = [ftsQuery];
-    if (scope) params.push(scope);
-    params.push(limit);
-    const rows = this.db.raw.prepare(sql).all(...params) as (MemoryRow & { rank: number })[];
+    const sql = scope ? FTS_RECALL_SCOPED : FTS_RECALL_UNSCOPED;
+    const stmt = cached(this.db.raw, sql);
+    const rows = (scope
+      ? stmt.all(ftsQuery, scope, limit)
+      : stmt.all(ftsQuery, limit)) as (MemoryRow & { rank: number })[];
     // FTS5 rank is negative (more-negative = better). Normalize to (0, 1].
     return rows.map((r) => ({
       memory: rowToMemory(r),
@@ -225,3 +207,49 @@ function rowToMemory(row: MemoryRow): Memory {
     updatedAt: row.updated_at,
   };
 }
+
+// Hot-path SQL kept as module-level constants so `cached()` can memoize the
+// prepared statement by reference. Two variants per search: with and without
+// the scope filter — bounded cache growth, fully expressible as static SQL.
+
+const VECTOR_RECALL_UNSCOPED = `
+  SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+         m.source, m.created_at, m.updated_at, v.distance AS distance
+  FROM memories_vec v
+  JOIN memories m ON m.id = v.rowid
+  LEFT JOIN scopes s ON s.id = m.scope_id
+  WHERE v.embedding MATCH ? AND k = ?
+  ORDER BY v.distance
+`;
+
+const VECTOR_RECALL_SCOPED = `
+  SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+         m.source, m.created_at, m.updated_at, v.distance AS distance
+  FROM memories_vec v
+  JOIN memories m ON m.id = v.rowid
+  LEFT JOIN scopes s ON s.id = m.scope_id
+  WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
+  ORDER BY v.distance
+`;
+
+const FTS_RECALL_UNSCOPED = `
+  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+         m.source, m.created_at, m.updated_at, f.rank AS rank
+  FROM memories_fts f
+  JOIN memories m ON m.id = f.rowid
+  LEFT JOIN scopes s ON s.id = m.scope_id
+  WHERE memories_fts MATCH ?
+  ORDER BY f.rank
+  LIMIT ?
+`;
+
+const FTS_RECALL_SCOPED = `
+  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+         m.source, m.created_at, m.updated_at, f.rank AS rank
+  FROM memories_fts f
+  JOIN memories m ON m.id = f.rowid
+  LEFT JOIN scopes s ON s.id = m.scope_id
+  WHERE memories_fts MATCH ? AND s.name = ?
+  ORDER BY f.rank
+  LIMIT ?
+`;
