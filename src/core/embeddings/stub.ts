@@ -15,6 +15,9 @@ export class StubEmbeddingProvider implements EmbeddingProvider {
   readonly dimension: number;
 
   constructor(dimension = STUB_EMBED_DIM) {
+    if (!Number.isInteger(dimension) || dimension <= 0) {
+      throw new RangeError(`Stub embedding dimension must be a positive integer, got: ${dimension}`);
+    }
     this.dimension = dimension;
   }
 

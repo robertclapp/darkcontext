@@ -1,20 +1,26 @@
 import type Database from 'better-sqlite3';
 
 import { DEFAULT_SCOPE_NAME } from '../constants.js';
+import { ValidationError } from '../errors.js';
 
 /**
- * Resolve a scope by name, creating it on demand. Keeps scope names as a
- * first-class caller concern while letting the row-insert paths stay
- * straightforward (most callers don't want to handle "does this scope
- * exist yet?").
+ * Resolve a scope by name, creating it on demand.
+ *
+ * Atomic: uses `INSERT … ON CONFLICT DO NOTHING` + `SELECT`, so concurrent
+ * callers racing on the same scope name never produce a UNIQUE-constraint
+ * error. Names are normalized with `.trim()`; empty names are rejected
+ * upstream by `resolveScopeOrDefault`.
  */
 export function resolveScopeId(db: Database.Database, name: string): number {
+  const info = db
+    .prepare('INSERT INTO scopes (name) VALUES (?) ON CONFLICT(name) DO NOTHING')
+    .run(name);
+  if (info.changes === 1) return Number(info.lastInsertRowid);
   const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(name) as
     | { id: number }
     | undefined;
-  if (row) return row.id;
-  const info = db.prepare('INSERT INTO scopes (name) VALUES (?)').run(name);
-  return Number(info.lastInsertRowid);
+  if (!row) throw new Error(`failed to resolve scope '${name}'`);
+  return row.id;
 }
 
 /**
@@ -29,7 +35,19 @@ export function defaultScopeId(db: Database.Database): number {
   return row.id;
 }
 
-/** Resolve the given name, or fall back to the default when no name is given. */
+/**
+ * Resolve an optional scope name.
+ *   - `undefined`         → default scope
+ *   - empty / whitespace  → ValidationError (silently routing an
+ *                           empty-string name to `default` would hide
+ *                           caller bugs)
+ *   - otherwise            → `resolveScopeId` (creates on demand)
+ */
 export function resolveScopeOrDefault(db: Database.Database, name: string | undefined): number {
-  return name ? resolveScopeId(db, name) : defaultScopeId(db);
+  if (name === undefined) return defaultScopeId(db);
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    throw new ValidationError('scope', 'scope name must be non-empty (omit the field for default)');
+  }
+  return resolveScopeId(db, trimmed);
 }

@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
@@ -25,7 +26,9 @@ export async function runIngest(
       {
         title: opts.title ?? basename(abs),
         content,
-        sourceUri: `file://${abs}`,
+        // pathToFileURL handles Windows drive letters, spaces, and
+        // percent-encoding; string concatenation produces broken URIs.
+        sourceUri: pathToFileURL(abs).href,
         mime: opts.mime,
         ...(opts.scope ? { scope: opts.scope } : {}),
       },

@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
 import { ValidationError } from '../../core/errors.js';
 
 export interface RecallOptions extends CommonCliOptions {
@@ -34,7 +34,7 @@ export function registerRecall(program: Command): void {
   program
     .command('recall <query...>')
     .description('Search memories (vector if available, keyword fallback)')
-    .option('--limit <n>', 'max results', (v) => Number(v), 10)
+    .option('--limit <n>', 'max results', parsePositiveInt('limit'), 10)
     .option('--scope <scope>', 'restrict to a scope')
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')

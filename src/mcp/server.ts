@@ -42,33 +42,42 @@ export function buildServer(filter: ScopeFilter, auditor: AuditSink): McpServer 
  */
 export async function startStdioServer(opts: ServeOptions = {}): Promise<StartedServer> {
   const ctx = AppContext.open(opts);
-
-  let callerTool;
+  let server: McpServer | undefined;
   try {
-    callerTool = resolveToolFromEnv(ctx.tools, opts.env);
+    const callerTool = resolveToolFromEnv(ctx.tools, opts.env);
+    const filter = new ScopeFilter(callerTool, {
+      memories: ctx.memories,
+      documents: ctx.documents,
+      workspaces: ctx.workspaces,
+      conversations: ctx.conversations,
+    });
+    const auditor = ctx.newAuditLog(callerTool);
+    server = buildServer(filter, auditor);
+
+    const transport: Transport = new StdioServerTransport();
+    await server.connect(transport);
+
+    return {
+      server,
+      filter,
+      close: async () => {
+        try {
+          await server!.close();
+        } finally {
+          // Always close the DB handle, even if the server shutdown
+          // fails — we still own the SQLite file descriptor.
+          ctx.close();
+        }
+      },
+    };
   } catch (err) {
-    ctx.close();
+    // Every setup failure (auth reject, transport.connect, anything else
+    // thrown after ctx.open) must still release the SQLite handle.
+    try {
+      await server?.close();
+    } finally {
+      ctx.close();
+    }
     throw err;
   }
-
-  const filter = new ScopeFilter(callerTool, {
-    memories: ctx.memories,
-    documents: ctx.documents,
-    workspaces: ctx.workspaces,
-    conversations: ctx.conversations,
-  });
-  const auditor = ctx.newAuditLog(callerTool);
-  const server = buildServer(filter, auditor);
-
-  const transport: Transport = new StdioServerTransport();
-  await server.connect(transport);
-
-  return {
-    server,
-    filter,
-    close: async () => {
-      await server.close();
-      ctx.close();
-    },
-  };
 }

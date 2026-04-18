@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
 import { AuditLog } from '../../core/audit/index.js';
 import { ValidationError } from '../../core/errors.js';
 
@@ -11,7 +11,7 @@ export function registerAuditCommands(program: Command): void {
   audit
     .command('list')
     .description('List recent audit entries (newest first)')
-    .option('--limit <n>', 'max rows', (v) => Number(v), 50)
+    .option('--limit <n>', 'max rows', parsePositiveInt('limit'), 50)
     .option('--tool <name>', 'filter by calling tool name')
     .option('--outcome <o>', 'filter by outcome (ok | denied | error)')
     .option('--db <path>', 'override database path')

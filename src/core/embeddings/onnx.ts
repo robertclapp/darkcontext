@@ -41,6 +41,9 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
 
   private async getPipeline(): Promise<unknown> {
     if (this.pipelinePromise) return this.pipelinePromise;
+    // Cache the in-flight promise so concurrent embed() calls share one
+    // init, but on failure clear the cache so a subsequent embed() can
+    // retry (e.g. after the user installs @xenova/transformers).
     this.pipelinePromise = (async () => {
       let mod: { pipeline: (task: string, model: string) => Promise<unknown> };
       try {
@@ -54,7 +57,10 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
         );
       }
       return mod.pipeline('feature-extraction', this.modelId);
-    })();
+    })().catch((err) => {
+      this.pipelinePromise = null;
+      throw err;
+    });
     return this.pipelinePromise;
   }
 }

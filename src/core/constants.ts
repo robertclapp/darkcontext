@@ -6,7 +6,7 @@
 
 /** Schema version currently understood by this binary. Bump when you add a
  *  non-additive change to `schema.sql` so older dcx versions fail loudly. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Name of the scope seeded by schema.sql. Used wherever a memory /
  *  document / workspace is created without an explicit scope. Renaming

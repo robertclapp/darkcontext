@@ -68,8 +68,14 @@ function linearize(mapping: Record<string, RawNode>): ImportedMessage[] {
   if (roots.length === 0) return [];
   const root = roots[0]!;
 
+  // Guard against cycles: a corrupted / hostile export could point a child
+  // back at its ancestor and blow the call stack. `visited` short-circuits
+  // before we recurse.
   const order: string[] = [];
+  const visited = new Set<string>();
   const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    visited.add(id);
     const node = mapping[id];
     if (!node) return;
     order.push(id);

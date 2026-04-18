@@ -18,11 +18,11 @@ export function createEmbeddingProvider(opts: FactoryOptions = {}): EmbeddingPro
   switch (kind) {
     case 'stub':   return new StubEmbeddingProvider();
     case 'ollama': return new OllamaEmbeddingProvider({
-      url: opts.config?.ollama.url ?? 'http://localhost:11434',
-      model: opts.config?.ollama.model ?? 'nomic-embed-text',
+      url: opts.config?.ollama?.url ?? 'http://localhost:11434',
+      model: opts.config?.ollama?.model ?? 'nomic-embed-text',
     });
     case 'onnx':   return new OnnxEmbeddingProvider({
-      model: opts.config?.onnx.model ?? 'Xenova/all-MiniLM-L6-v2',
+      model: opts.config?.onnx?.model ?? 'Xenova/all-MiniLM-L6-v2',
     });
   }
 }

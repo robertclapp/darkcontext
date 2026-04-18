@@ -38,13 +38,19 @@ describe('Documents', () => {
     });
     const hits = await fx.documents.search('how do I maintain the espresso machine', { limit: 5 });
     expect(hits.length).toBeGreaterThan(0);
-    expect(hits[0]!.title).toMatch(/coffee|tennis/);
+    // Top hit must be the coffee doc, not the unrelated tennis one —
+    // the loose `toMatch(/coffee|tennis/)` was insensitive to ranking
+    // regressions where tennis would win.
+    expect(hits[0]!.title).toBe('coffee.txt');
   });
 
   it('filters by scope', async () => {
     await fx.documents.ingest({ title: 'a', content: 'alpha content', scope: 'work' });
     await fx.documents.ingest({ title: 'b', content: 'beta content', scope: 'personal' });
     const workHits = await fx.documents.search('content', { scope: 'work' });
+    // Assert we actually retrieved something — otherwise `every` trivially
+    // passes on an empty array.
+    expect(workHits.length).toBeGreaterThan(0);
     expect(workHits.every((h) => h.scope === 'work')).toBe(true);
   });
 

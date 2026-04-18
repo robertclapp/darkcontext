@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
@@ -27,17 +28,20 @@ export interface StartedHttpServer {
 /**
  * Start the DarkContext MCP server over Streamable HTTP.
  *
- * Auth model (M3): one process = one tool identity. The process is
+ * Auth model: one process = one tool identity. The process is
  * configured with a single bearer token (via --token / DARKCONTEXT_TOKEN)
  * and rejects requests whose `Authorization: Bearer ...` header does not
  * match in constant time. Multi-tool HTTP with per-request identity is
  * deferred to a future milestone.
  *
  * Any error thrown during setup (missing token, unregistered token,
- * listen failure) closes the context before propagating — no DB leak.
+ * listen failure) closes every opened resource — context, MCP server,
+ * transport — before propagating, so no DB or socket handle leaks.
  */
 export async function startHttpServer(opts: HttpServeOptions = {}): Promise<StartedHttpServer> {
   const ctx = AppContext.open(opts);
+  let mcpServer: McpServer | undefined;
+  let transport: StreamableHTTPServerTransport | undefined;
   try {
     const token = opts.token ?? ctx.config.token;
     if (!token) {
@@ -56,9 +60,9 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       conversations: ctx.conversations,
     });
     const auditor = ctx.newAuditLog(callerTool);
-    const mcpServer = buildServer(filter, auditor);
+    mcpServer = buildServer(filter, auditor);
 
-    const transport = new StreamableHTTPServerTransport(
+    transport = new StreamableHTTPServerTransport(
       // Stateless mode: the SDK signals this by omitting a generator function.
       // The type demands a function under exactOptionalPropertyTypes; the
       // runtime accepts `undefined` — cast deliberately.
@@ -69,15 +73,24 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     await mcpServer.connect(transport as unknown as Transport);
 
     const expectedHash = hashToken(token);
+    const boundTransport = transport;
     const httpServer = createServer(async (req, res) => {
       if (!checkBearer(req, expectedHash)) return unauthorized(res);
       try {
-        await transport.handleRequest(req, res);
+        await boundTransport.handleRequest(req, res);
       } catch (err) {
+        // Do NOT reflect raw error text to clients — messages may contain
+        // file paths, SQL fragments, or stack traces. Log server-side for
+        // operators, send a generic response to the wire. Errors thrown
+        // after headers have flushed can't produce a response body; still
+        // log them so they aren't swallowed.
         if (!res.headersSent) {
           res.statusCode = 500;
           res.setHeader('content-type', 'application/json');
-          res.end(JSON.stringify({ error: (err as Error).message }));
+          console.error('[darkcontext http] request failed:', err);
+          res.end(JSON.stringify({ error: 'internal server error' }));
+        } else {
+          console.error('[darkcontext http] error after headers sent:', err);
         }
       }
     });
@@ -109,14 +122,31 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       httpServer,
       port: actualPort,
       close: async () => {
-        await new Promise<void>((done, reject) =>
-          httpServer.close((err) => (err ? reject(err) : done()))
-        );
-        await mcpServer.close();
-        ctx.close();
+        // The HTTP listener, the MCP server, and the AppContext are three
+        // separate resources. `ctx.close()` MUST run even if either of
+        // the other two rejects during shutdown, so the DB handle is
+        // always released.
+        try {
+          await new Promise<void>((done, reject) =>
+            httpServer.close((err) => (err ? reject(err) : done()))
+          );
+          if (mcpServer) await mcpServer.close();
+        } finally {
+          ctx.close();
+        }
       },
     };
   } catch (err) {
+    // Startup failure path: tear down anything we successfully opened
+    // before the throw, in reverse order, and swallow secondary errors
+    // so the primary (the actual cause) propagates.
+    if (mcpServer) {
+      try {
+        await mcpServer.close();
+      } catch {
+        /* best-effort */
+      }
+    }
     ctx.close();
     throw err;
   }

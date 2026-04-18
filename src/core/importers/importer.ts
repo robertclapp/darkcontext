@@ -16,12 +16,19 @@ export interface Importer {
 export { ImporterParseError };
 
 export function toEpochMs(value: unknown): number {
-  if (typeof value === 'number') {
+  if (typeof value === 'number' && Number.isFinite(value)) {
     // ChatGPT uses epoch seconds (float), Claude uses ISO, Gemini varies.
     return value < 1e12 ? Math.round(value * 1000) : Math.round(value);
   }
   if (typeof value === 'string' && value.length > 0) {
-    const parsed = Date.parse(value);
+    const s = value.trim();
+    // Digit-only strings (e.g. "1700000000") fail Date.parse and would
+    // otherwise fall through to Date.now(), corrupting import timestamps.
+    if (/^\d+(\.\d+)?$/.test(s)) {
+      const n = Number(s);
+      if (Number.isFinite(n)) return n < 1e12 ? Math.round(n * 1000) : Math.round(n);
+    }
+    const parsed = Date.parse(s);
     if (!Number.isNaN(parsed)) return parsed;
   }
   return Date.now();

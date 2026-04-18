@@ -42,10 +42,21 @@ export class ClaudeImporter implements Importer {
     }
 
     const out: ImportedConversation[] = [];
-    for (const item of data as RawConversation[]) {
-      const rawMessages = item.chat_messages ?? item.messages ?? [];
+    // Defensive parsing: real-world exports contain the occasional null
+    // or partially-written entry. Skip malformed elements rather than
+    // blowing up with a raw TypeError on `item.chat_messages`.
+    for (const rawItem of data as unknown[]) {
+      if (!rawItem || typeof rawItem !== 'object') continue;
+      const item = rawItem as RawConversation;
+      const rawMessages = Array.isArray(item.chat_messages)
+        ? item.chat_messages
+        : Array.isArray(item.messages)
+          ? item.messages
+          : [];
       const messages: ImportedMessage[] = [];
-      for (const m of rawMessages) {
+      for (const rawMessage of rawMessages) {
+        if (!rawMessage || typeof rawMessage !== 'object') continue;
+        const m = rawMessage as RawMessage;
         const text = extractText(m);
         if (!text) continue;
         messages.push({

@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
 import { ValidationError } from '../../core/errors.js';
 
 export function registerHistoryCommands(program: Command): void {
@@ -14,7 +14,7 @@ export function registerHistoryCommands(program: Command): void {
     .description('List imported conversations')
     .option('--source <source>', 'filter by source (chatgpt, claude, gemini, generic)')
     .option('--scope <scope>', 'filter by scope')
-    .option('--limit <n>', 'max results', (v) => Number(v), 100)
+    .option('--limit <n>', 'max results', parsePositiveInt('limit'), 100)
     .option('--db <path>', 'override database path')
     .action(async (opts: CommonCliOptions & { source?: string; scope?: string; limit: number }) => {
       await withAppContext(opts, (ctx) => {
@@ -36,7 +36,7 @@ export function registerHistoryCommands(program: Command): void {
     .description('Semantic search across past conversation messages')
     .option('--source <source>', 'filter by source')
     .option('--scope <scope>', 'filter by scope')
-    .option('--limit <n>', 'max messages', (v) => Number(v), 10)
+    .option('--limit <n>', 'max messages', parsePositiveInt('limit'), 10)
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .action(

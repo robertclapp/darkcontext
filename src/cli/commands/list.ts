@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
 
 export interface ListOptions extends CommonCliOptions {
   limit: number;
@@ -29,7 +29,7 @@ export function registerList(program: Command): void {
   program
     .command('list')
     .description('List stored memories (newest first)')
-    .option('--limit <n>', 'max results', (v) => Number(v), 50)
+    .option('--limit <n>', 'max results', parsePositiveInt('limit'), 50)
     .option('--scope <scope>', 'restrict to a scope')
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')

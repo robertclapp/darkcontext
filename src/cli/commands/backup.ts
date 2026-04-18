@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { openDb } from '../../core/store/db.js';
@@ -41,7 +41,7 @@ export function registerBackup(program: Command): void {
     .action((src: string, opts: { db?: string; yes: boolean }) => {
       const srcPath = resolve(src);
       if (!existsSync(srcPath)) throw new NotFoundError('backup file', srcPath);
-      const destPath = opts.db ?? loadConfig().dbPath;
+      const destPath = resolve(opts.db ?? loadConfig().dbPath);
 
       if (!opts.yes) {
         throw new ValidationError(
@@ -52,10 +52,18 @@ export function registerBackup(program: Command): void {
 
       mkdirSync(dirname(destPath), { recursive: true });
       copyFileSync(srcPath, destPath);
+      // Mirror the sidecar files exactly: copy when present in the
+      // backup, delete when absent. Leaving a stale -wal/-shm in place
+      // could resurrect old transactions that the backup already folded
+      // into the main file.
       for (const suffix of ['-wal', '-shm']) {
         const from = `${srcPath}${suffix}`;
         const to = `${destPath}${suffix}`;
-        if (existsSync(from)) copyFileSync(from, to);
+        if (existsSync(from)) {
+          copyFileSync(from, to);
+        } else if (existsSync(to)) {
+          rmSync(to);
+        }
       }
       console.log(`restored ${destPath} from ${srcPath}`);
     });

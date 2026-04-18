@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
 import { ValidationError } from '../../core/errors.js';
 
 interface DocListOptions extends CommonCliOptions {
@@ -65,7 +65,7 @@ export function registerDocumentCommands(program: Command): void {
     .command('list')
     .description('List ingested documents')
     .option('--scope <scope>', 'restrict to a scope')
-    .option('--limit <n>', 'max results', (v) => Number(v), 50)
+    .option('--limit <n>', 'max results', parsePositiveInt('limit'), 50)
     .option('--db <path>', 'override database path')
     .action(async (opts: DocListOptions) => runDocList(opts));
 
@@ -73,7 +73,7 @@ export function registerDocumentCommands(program: Command): void {
     .command('search <query...>')
     .description('Search document chunks by semantic similarity')
     .option('--scope <scope>', 'restrict to a scope')
-    .option('--limit <n>', 'max chunks', (v) => Number(v), 10)
+    .option('--limit <n>', 'max chunks', parsePositiveInt('limit'), 10)
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .action(async (queryParts: string[], opts: DocSearchOptions) =>

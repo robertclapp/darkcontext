@@ -56,7 +56,10 @@ function parseProviderKind(raw: string | undefined, fallback: ProviderKind = 'st
 /** Build a `Config` from process.env plus optional overrides (overrides win). */
 export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = process.env): Config {
   const home = overrides.home ?? env.DARKCONTEXT_HOME ?? join(homedir(), '.darkcontext');
-  const dbPath = overrides.dbPath ?? join(home, 'store.db');
+  // Explicit --db / overrides.dbPath wins; then DARKCONTEXT_DB_PATH;
+  // finally the conventional ${home}/store.db. The env var lets operators
+  // relocate the store without setting a full home directory.
+  const dbPath = overrides.dbPath ?? env.DARKCONTEXT_DB_PATH ?? join(home, 'store.db');
   const embeddings = overrides.embeddings ?? parseProviderKind(env.DARKCONTEXT_EMBEDDINGS);
   return {
     home,
