@@ -1,0 +1,43 @@
+{
+  "name": "darkcontext",
+  "version": "0.1.0",
+  "description": "Bring-your-own-context layer for LLMs — self-hosted MCP server backed by SQLite + vector search.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "dcx": "dist/cli/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "src/core/store/schema.sql",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "dev": "tsx src/cli/index.ts",
+    "dcx": "tsx src/cli/index.ts",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0",
+    "sqlite-vec": "^0.1.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.10",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.9.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
