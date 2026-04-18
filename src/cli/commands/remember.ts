@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
+import { ValidationError } from '../../core/errors.js';
 
 export interface RememberOptions extends CommonCliOptions {
   kind: string;
@@ -15,7 +16,7 @@ export async function runRemember(
   opts: RememberOptions,
   out: (line: string) => void = console.log
 ): Promise<void> {
-  if (!content.trim()) throw new Error('remember: content is empty');
+  if (!content.trim()) throw new ValidationError('content', 'remember: content is empty');
   await withAppContext(opts, async (ctx) => {
     const memory = await ctx.memories.remember({
       content,

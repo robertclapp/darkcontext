@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
-import { ValidationError } from '../../core/errors.js';
+import { ConfigError, ValidationError } from '../../core/errors.js';
 
 type ReindexKind = 'memories' | 'documents' | 'history';
 const ALL_KINDS: readonly ReindexKind[] = ['memories', 'documents', 'history'];
@@ -18,7 +18,7 @@ export async function runReindex(
   const want = parseOnly(opts.only);
   await withAppContext(opts, async (ctx) => {
     if (!ctx.db.hasVec) {
-      throw new Error('sqlite-vec is not loaded — reindex cannot run. Install the sqlite-vec native binary.');
+      throw new ConfigError('sqlite-vec is not loaded — reindex cannot run. Install the sqlite-vec native binary.');
     }
     out(`reindexing ${want.join(', ')} via ${ctx.embeddings.name} at ${ctx.config.dbPath}`);
     if (want.includes('memories')) out(`  memories: ${await ctx.memories.reindex()} rows`);

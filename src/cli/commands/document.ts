@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
+import { ValidationError } from '../../core/errors.js';
 
 interface DocListOptions extends CommonCliOptions {
   scope?: string;
@@ -29,7 +30,7 @@ export async function runDocSearch(
   opts: DocSearchOptions,
   out: (l: string) => void = console.log
 ): Promise<void> {
-  if (!query.trim()) throw new Error('search: query is empty');
+  if (!query.trim()) throw new ValidationError('query', 'document search: query is empty');
   await withAppContext(opts, async (ctx) => {
     const hits = await ctx.documents.search(query, {
       limit: opts.limit,

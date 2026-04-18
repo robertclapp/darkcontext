@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
+import { ValidationError } from '../../core/errors.js';
 
 export function registerHistoryCommands(program: Command): void {
   const hist = program
@@ -44,7 +45,7 @@ export function registerHistoryCommands(program: Command): void {
         opts: CommonCliOptions & { source?: string; scope?: string; limit: number }
       ) => {
         const query = queryParts.join(' ').trim();
-        if (!query) throw new Error('history search: query is empty');
+        if (!query) throw new ValidationError('query', 'history search: query is empty');
         await withAppContext(opts, async (ctx) => {
           const hits = await ctx.conversations.search(query, {
             limit: opts.limit,

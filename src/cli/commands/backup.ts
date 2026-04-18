@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 
 import { openDb } from '../../core/store/db.js';
 import { loadConfig } from '../../core/config.js';
+import { NotFoundError, ValidationError } from '../../core/errors.js';
 
 export function registerBackup(program: Command): void {
   program
@@ -30,11 +31,12 @@ export function registerBackup(program: Command): void {
     .option('--yes', "don't prompt for confirmation", false)
     .action((src: string, opts: { db?: string; yes: boolean }) => {
       const srcPath = resolve(src);
-      if (!existsSync(srcPath)) throw new Error(`no such backup file: ${srcPath}`);
+      if (!existsSync(srcPath)) throw new NotFoundError('backup file', srcPath);
       const destPath = opts.db ?? loadConfig().dbPath;
 
       if (!opts.yes) {
-        throw new Error(
+        throw new ValidationError(
+          'yes',
           `refusing to overwrite ${destPath} without --yes. Inspect the backup first with \`dcx doctor --db ${srcPath}\`.`
         );
       }

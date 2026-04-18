@@ -3,6 +3,7 @@ import type { Command } from 'commander';
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
 import { AuditLog } from '../../core/audit/index.js';
+import { ValidationError } from '../../core/errors.js';
 
 export function registerAuditCommands(program: Command): void {
   const audit = program.command('audit').description('Inspect the MCP audit log');
@@ -42,7 +43,7 @@ export function registerAuditCommands(program: Command): void {
     .option('--db <path>', 'override database path')
     .action(async (opts: CommonCliOptions & { before: string }) => {
       const before = Date.parse(opts.before);
-      if (Number.isNaN(before)) throw new Error(`unparseable timestamp: ${opts.before}`);
+      if (Number.isNaN(before)) throw new ValidationError('before', `unparseable timestamp: ${opts.before}`);
       await withAppContext(opts, (ctx) => {
         const n = new AuditLog(ctx.db, null).prune(before);
         console.log(`pruned ${n} audit rows older than ${opts.before}`);

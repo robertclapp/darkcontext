@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
+import { ValidationError } from '../../core/errors.js';
 
 export interface RecallOptions extends CommonCliOptions {
   limit: number;
@@ -13,7 +14,7 @@ export async function runRecall(
   opts: RecallOptions,
   out: (line: string) => void = console.log
 ): Promise<void> {
-  if (!query.trim()) throw new Error('recall: query is empty');
+  if (!query.trim()) throw new ValidationError('query', 'recall: query is empty');
   await withAppContext(opts, async (ctx) => {
     const hits = await ctx.memories.recall(query, {
       limit: opts.limit,
