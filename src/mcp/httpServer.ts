@@ -6,7 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { AppContext, type ContextInit } from '../core/context.js';
 import { AuthError } from '../core/errors.js';
-import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT } from '../core/constants.js';
+import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, SCHEMA_VERSION } from '../core/constants.js';
 import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
@@ -75,6 +75,17 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     const expectedHash = hashToken(token);
     const boundTransport = transport;
     const httpServer = createServer(async (req, res) => {
+      // Unauthenticated health probe — operationally useful for
+      // uptime monitoring + load balancer readiness checks. Returns
+      // only public metadata (version + schema version + `ok: true`).
+      // No bearer required precisely BECAUSE it's safe to serve
+      // anonymously; anything private stays behind /mcp.
+      if (req.method === 'GET' && req.url === '/healthz') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, version: '0.2.0', schemaVersion: SCHEMA_VERSION }));
+        return;
+      }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);
       try {
         await boundTransport.handleRequest(req, res);

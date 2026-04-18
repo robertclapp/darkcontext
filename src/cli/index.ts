@@ -21,6 +21,8 @@ import { registerBackup } from './commands/backup.js';
 import { registerAuditCommands } from './commands/audit.js';
 import { registerReindex } from './commands/reindex.js';
 import { registerExport } from './commands/export.js';
+import { registerShow } from './commands/show.js';
+import { registerVacuum } from './commands/vacuum.js';
 
 const program = new Command();
 program
@@ -45,6 +47,8 @@ registerBackup(program);
 registerAuditCommands(program);
 registerReindex(program);
 registerExport(program);
+registerShow(program);
+registerVacuum(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

@@ -96,6 +96,18 @@ describe('HTTP transport bearer auth', () => {
     ).rejects.toThrow(/does not match/);
   });
 
+  it('serves GET /healthz without auth and reports ok + version + schemaVersion', async () => {
+    // Explicitly NO Authorization header: /healthz must answer anonymously
+    // or it's useless for uptime monitoring / load balancer probes.
+    const res = await fetch(`${baseUrl}/healthz`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { ok: boolean; version: string; schemaVersion: number };
+    expect(body.ok).toBe(true);
+    expect(typeof body.version).toBe('string');
+    expect(body.schemaVersion).toBeGreaterThan(0);
+  });
+
   it('rejects cleanly when the bind port is already in use (does not crash the process)', async () => {
     // Start a second server on the same port as the first one. Previously
     // the listen() wrapper only resolved on success, so EADDRINUSE escaped

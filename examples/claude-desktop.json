@@ -1,0 +1,12 @@
+{
+  "_comment": "Paste the `mcpServers` entry below into ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %APPDATA%\\Claude\\claude_desktop_config.json (Windows). Replace the token with one you minted via `dcx tool add <name> --scopes personal,work`.",
+  "mcpServers": {
+    "darkcontext": {
+      "command": "dcx",
+      "args": ["serve"],
+      "env": {
+        "DARKCONTEXT_TOKEN": "dcx_REPLACE_WITH_YOUR_REAL_TOKEN"
+      }
+    }
+  }
+}
