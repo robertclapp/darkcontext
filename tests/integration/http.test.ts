@@ -71,4 +71,16 @@ describe('HTTP transport bearer auth', () => {
       startHttpServer({ dbPath, token: 'dcx_ghost_token', port: 0 })
     ).rejects.toThrow(/does not match/);
   });
+
+  it('rejects cleanly when the bind port is already in use (does not crash the process)', async () => {
+    // Start a second server on the same port as the first one. Previously
+    // the listen() wrapper only resolved on success, so EADDRINUSE escaped
+    // as an unhandled 'error' event and killed the process. With the error
+    // handler in place it should surface as a rejected promise — and the
+    // AppContext opened internally must still be closed cleanly.
+    const occupiedPort = started.port;
+    await expect(
+      startHttpServer({ dbPath, token, port: occupiedPort, host: '127.0.0.1' })
+    ).rejects.toThrow(/EADDRINUSE/);
+  });
 });

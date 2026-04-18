@@ -14,7 +14,16 @@ export function registerBackup(program: Command): void {
     .action(async (dest: string, opts: { db?: string }) => {
       const destPath = resolve(dest);
       mkdirSync(dirname(destPath), { recursive: true });
-      const src = openDb(opts.db ? { path: opts.db } : {});
+      // Open the source through the same config resolver every other
+      // command uses so SQLCipher-encrypted stores can be backed up — the
+      // key comes from DARKCONTEXT_ENCRYPTION_KEY. Previously this call
+      // passed only `path`, so encrypted deployments could not run
+      // `dcx backup` at all.
+      const cfg = loadConfig(opts.db ? { dbPath: opts.db } : {});
+      const src = openDb({
+        path: cfg.dbPath,
+        ...(cfg.encryptionKey ? { encryptionKey: cfg.encryptionKey } : {}),
+      });
       try {
         await src.raw.backup(destPath);
         const bytes = statSync(destPath).size;

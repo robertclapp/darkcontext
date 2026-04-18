@@ -84,7 +84,24 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
 
     const port = opts.port ?? DEFAULT_HTTP_PORT;
     const host = opts.host ?? DEFAULT_HTTP_HOST;
-    await new Promise<void>((done) => httpServer.listen(port, host, done));
+    // `listen()` calls the success callback on bind success and emits an
+    // `'error'` event on failure (EADDRINUSE, EACCES, ...). Without a
+    // listener, that event crashes the process AND escapes the outer
+    // try/catch that would have closed the AppContext. Race the two so
+    // the startup path surfaces a typed error that the caller can handle.
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const onError = (err: Error): void => {
+        httpServer.off('listening', onListening);
+        rejectPromise(err);
+      };
+      const onListening = (): void => {
+        httpServer.off('error', onError);
+        resolvePromise();
+      };
+      httpServer.once('error', onError);
+      httpServer.once('listening', onListening);
+      httpServer.listen(port, host);
+    });
     const address = httpServer.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;
 
