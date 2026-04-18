@@ -13,6 +13,7 @@ examples, coverage tooling, and release hygiene.
 - `dcx show <id>` — inspect a single memory row including tags, scope, and timestamps.
 - `dcx vacuum` — runs `PRAGMA integrity_check`, reports orphan vec rows, then `VACUUM`. Safe to run on a live store.
 - `dcx doctor` now prints per-table row counts and the `integrity_check` result.
+- `dcx tool add --json` — script-friendly output. Emits a single JSON object with `{ tool, token, grants, mcpServerConfig }` so launchers can pipe through `jq` instead of parsing the human banner. Shape is a public contract and tested.
 - HTTP transport exposes `GET /healthz` (no auth) returning `{ ok: true, version, schemaVersion }` for uptime monitoring.
 - `examples/` directory with paste-ready Claude Desktop config, a curl-driven HTTP demo script, an Ollama setup walkthrough, and a template generic-import dataset.
 - `CONTRIBUTING.md` with dev loop, PR conventions, and extension guide.

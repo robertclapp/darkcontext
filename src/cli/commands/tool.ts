@@ -2,6 +2,85 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
+import type { ProvisionedTool } from '../../core/tools/index.js';
+
+export interface ToolAddOptions extends CommonCliOptions {
+  scopes: string;
+  readOnly: boolean;
+  /** Emit the provisioning result as a single JSON object instead of the
+   *  human-readable banner. Useful for scripts that mint a token and pipe
+   *  the result through `jq` (see examples/curl-http-demo.sh). */
+  json?: boolean;
+}
+
+/**
+ * Public, scriptable shape of `dcx tool add --json`.
+ *
+ * Callers (CI scripts, the `examples/curl-http-demo.sh` launcher, the
+ * Claude Desktop config generator in MCP clients) can depend on this
+ * object staying shape-stable across patch releases. Fields:
+ *
+ *   tool         — the stored row (id, name, timestamps, last_seen).
+ *   token        — plaintext bearer token. Returned ONCE by construction;
+ *                  the store keeps only the sha256 hash.
+ *   grants       — explicit permissions per scope.
+ *   mcpServerConfig — a drop-in `mcpServers[<name>]` entry for any MCP
+ *                  client that speaks the Claude Desktop config shape.
+ */
+export interface ToolAddJsonOutput {
+  tool: ProvisionedTool['tool'];
+  token: string;
+  grants: ProvisionedTool['grants'];
+  mcpServerConfig: {
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  };
+}
+
+export async function runToolAdd(
+  name: string,
+  opts: ToolAddOptions,
+  out: (line: string) => void = console.log
+): Promise<void> {
+  await withAppContext(opts, (ctx) => {
+    const result = ctx.tools.create({
+      name,
+      scopes: parseList(opts.scopes),
+      readOnly: opts.readOnly,
+    });
+
+    const mcpServerConfig = {
+      command: 'dcx',
+      args: ['serve', ...(opts.db ? ['--db', opts.db] : [])],
+      env: { DARKCONTEXT_TOKEN: result.token },
+    };
+
+    if (opts.json) {
+      const payload: ToolAddJsonOutput = {
+        tool: result.tool,
+        token: result.token,
+        grants: result.grants,
+        mcpServerConfig,
+      };
+      out(JSON.stringify(payload));
+      return;
+    }
+
+    out(`Provisioned tool '${result.tool.name}' (#${result.tool.id})`);
+    out('Scopes:');
+    for (const g of result.grants) {
+      const perms = [g.canRead ? 'read' : null, g.canWrite ? 'write' : null].filter(Boolean);
+      out(`  - ${g.scope} (${perms.join(', ')})`);
+    }
+    out('');
+    out('TOKEN (save now — will not be shown again):');
+    out(`  ${result.token}`);
+    out('');
+    out('Claude Desktop / MCP client config snippet:');
+    out(JSON.stringify({ mcpServers: { [result.tool.name]: mcpServerConfig } }, null, 2));
+  });
+}
 
 export function registerToolCommands(program: Command): void {
   const tool = program.command('tool').description('Manage MCP tool identities');
@@ -11,47 +90,11 @@ export function registerToolCommands(program: Command): void {
     .description('Provision a new tool, grant scopes, and print its bearer token')
     .requiredOption('--scopes <scopes>', 'comma-separated scope names')
     .option('--read-only', 'tool can read but not write the granted scopes', false)
+    .option('--json', 'emit a single JSON object (script-friendly) instead of the human banner', false)
     .option('--db <path>', 'override database path')
-    .action(
-      async (
-        name: string,
-        opts: CommonCliOptions & { scopes: string; readOnly: boolean }
-      ) => {
-        await withAppContext(opts, (ctx) => {
-          const result = ctx.tools.create({
-            name,
-            scopes: parseList(opts.scopes),
-            readOnly: opts.readOnly,
-          });
-          console.log(`Provisioned tool '${result.tool.name}' (#${result.tool.id})`);
-          console.log('Scopes:');
-          for (const g of result.grants) {
-            const perms = [g.canRead ? 'read' : null, g.canWrite ? 'write' : null].filter(Boolean);
-            console.log(`  - ${g.scope} (${perms.join(', ')})`);
-          }
-          console.log('');
-          console.log('TOKEN (save now — will not be shown again):');
-          console.log(`  ${result.token}`);
-          console.log('');
-          console.log('Claude Desktop / MCP client config snippet:');
-          console.log(
-            JSON.stringify(
-              {
-                mcpServers: {
-                  [result.tool.name]: {
-                    command: 'dcx',
-                    args: ['serve', ...(opts.db ? ['--db', opts.db] : [])],
-                    env: { DARKCONTEXT_TOKEN: result.token },
-                  },
-                },
-              },
-              null,
-              2
-            )
-          );
-        });
-      }
-    );
+    .action(async (name: string, opts: ToolAddOptions) => {
+      await runToolAdd(name, opts);
+    });
 
   tool
     .command('list')

@@ -12,10 +12,11 @@ echo "→ init store at $DB"
 dcx init --db "$DB" >/dev/null
 
 echo "→ provision a tool identity"
-TOKEN="$(
-  dcx tool add demo --scopes default --db "$DB" 2>&1 \
-    | awk '/^  dcx_/ {print $1; exit}'
-)"
+# `dcx tool add --json` emits a single parseable object; piping through
+# jq is much more robust than awk-ing the human banner (which is what
+# this script did pre-0.2 and what review correctly flagged as brittle).
+PROVISION_JSON="$(dcx tool add demo --scopes default --json --db "$DB")"
+TOKEN="$(echo "$PROVISION_JSON" | jq -r '.token')"
 echo "  token: $TOKEN"
 
 echo "→ start HTTP server on 127.0.0.1:$PORT (background)"
