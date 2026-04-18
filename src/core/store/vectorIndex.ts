@@ -85,7 +85,11 @@ export class VectorIndex {
     tx();
   }
 
-  /** Drop all rows from this vector table (used by `dcx reindex`). */
+  /**
+   * Drop all rows from this vector table. Public only so `reindex([], [])`
+   * can delegate; external callers should use `reindex(ids, texts)` to get
+   * atomic swap semantics rather than a bare truncate.
+   */
   truncate(): void {
     if (!this.db.hasVec || this.db.embedDim === 0) return;
     this.db.raw.exec(`DELETE FROM ${this.tableName}`);

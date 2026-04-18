@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
+import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -178,15 +179,8 @@ export class Conversations {
 
   private vectorSearch(qv: number[], limit: number, opts: HistorySearchOptions): HistoryHit[] {
     const filters: string[] = [];
-    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
-    if (opts.scope) {
-      filters.push('AND s.name = ?');
-      params.push(opts.scope);
-    }
-    if (opts.source) {
-      filters.push('AND c.source = ?');
-      params.push(opts.source);
-    }
+    if (opts.scope) filters.push('AND s.name = ?');
+    if (opts.source) filters.push('AND c.source = ?');
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
              m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
@@ -199,7 +193,16 @@ export class Conversations {
         ${filters.join(' ')}
       ORDER BY v.distance
     `;
-    const rows = this.db.raw.prepare(sql).all(...params) as HitRow[];
+    // SQL shape is bounded by the 4 scope x source combinations, so
+    // preparedCache memoizes a small, finite set of statements.
+    const stmt = cached(this.db.raw, sql);
+    const rows = (opts.scope && opts.source
+      ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope, opts.source)
+      : opts.scope
+        ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope)
+        : opts.source
+          ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.source)
+          : stmt.all(VectorIndex.queryBlob(qv), limit)) as HitRow[];
     return rows.map((r) => rowToHit(r, 'vector'));
   }
 
@@ -213,16 +216,8 @@ export class Conversations {
 
   private ftsSearch(ftsQuery: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
     const filters: string[] = [];
-    const params: unknown[] = [ftsQuery];
-    if (opts.scope) {
-      filters.push('AND s.name = ?');
-      params.push(opts.scope);
-    }
-    if (opts.source) {
-      filters.push('AND c.source = ?');
-      params.push(opts.source);
-    }
-    params.push(limit);
+    if (opts.scope) filters.push('AND s.name = ?');
+    if (opts.source) filters.push('AND c.source = ?');
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
              m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
@@ -236,7 +231,14 @@ export class Conversations {
       ORDER BY f.rank
       LIMIT ?
     `;
-    const rows = this.db.raw.prepare(sql).all(...params) as (HitRow & { rank: number })[];
+    const stmt = cached(this.db.raw, sql);
+    const rows = (opts.scope && opts.source
+      ? stmt.all(ftsQuery, opts.scope, opts.source, limit)
+      : opts.scope
+        ? stmt.all(ftsQuery, opts.scope, limit)
+        : opts.source
+          ? stmt.all(ftsQuery, opts.source, limit)
+          : stmt.all(ftsQuery, limit)) as (HitRow & { rank: number })[];
     return rows.map((r) => {
       const hit = rowToHit(r, 'keyword');
       hit.score = Math.min(1, 1 / (1 + Math.abs(r.rank)));

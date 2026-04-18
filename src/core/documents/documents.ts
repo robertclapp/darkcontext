@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
+import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -133,22 +134,11 @@ export class Documents {
   }
 
   private vectorSearch(qv: number[], limit: number, scope?: string): DocumentChunkHit[] {
-    const sql = `
-      SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
-             d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content,
-             v.distance AS distance
-      FROM document_chunks_vec v
-      JOIN document_chunks c ON c.id = v.rowid
-      JOIN documents d ON d.id = c.document_id
-      LEFT JOIN scopes s ON s.id = d.scope_id
-      WHERE v.embedding MATCH ?
-        AND k = ?
-        ${scope ? 'AND s.name = ?' : ''}
-      ORDER BY v.distance
-    `;
-    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
-    if (scope) params.push(scope);
-    const rows = this.db.raw.prepare(sql).all(...params) as ChunkHitRow[];
+    const sql = scope ? DOC_VECTOR_SCOPED : DOC_VECTOR_UNSCOPED;
+    const stmt = cached(this.db.raw, sql);
+    const rows = (scope
+      ? stmt.all(VectorIndex.queryBlob(qv), limit, scope)
+      : stmt.all(VectorIndex.queryBlob(qv), limit)) as ChunkHitRow[];
     return rows.map((r) => ({
       documentId: r.id,
       title: r.title,
@@ -169,22 +159,11 @@ export class Documents {
   }
 
   private ftsSearch(ftsQuery: string, limit: number, scope?: string): DocumentChunkHit[] {
-    const sql = `
-      SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
-             d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, f.rank AS rank
-      FROM document_chunks_fts f
-      JOIN document_chunks c ON c.id = f.rowid
-      JOIN documents d ON d.id = c.document_id
-      LEFT JOIN scopes s ON s.id = d.scope_id
-      WHERE document_chunks_fts MATCH ?
-        ${scope ? 'AND s.name = ?' : ''}
-      ORDER BY f.rank
-      LIMIT ?
-    `;
-    const params: unknown[] = [ftsQuery];
-    if (scope) params.push(scope);
-    params.push(limit);
-    const rows = this.db.raw.prepare(sql).all(...params) as (ChunkHitRow & { rank: number })[];
+    const sql = scope ? DOC_FTS_SCOPED : DOC_FTS_UNSCOPED;
+    const stmt = cached(this.db.raw, sql);
+    const rows = (scope
+      ? stmt.all(ftsQuery, scope, limit)
+      : stmt.all(ftsQuery, limit)) as (ChunkHitRow & { rank: number })[];
     return rows.map((r) => ({
       documentId: r.id,
       title: r.title,
@@ -235,3 +214,51 @@ function rowToDoc(row: DocRow): Document {
     ingestedAt: row.ingested_at,
   };
 }
+
+// Hot-path SQL — see memories.ts for why these are module-level constants.
+
+const DOC_VECTOR_UNSCOPED = `
+  SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
+         d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, v.distance AS distance
+  FROM document_chunks_vec v
+  JOIN document_chunks c ON c.id = v.rowid
+  JOIN documents d ON d.id = c.document_id
+  LEFT JOIN scopes s ON s.id = d.scope_id
+  WHERE v.embedding MATCH ? AND k = ?
+  ORDER BY v.distance
+`;
+
+const DOC_VECTOR_SCOPED = `
+  SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
+         d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, v.distance AS distance
+  FROM document_chunks_vec v
+  JOIN document_chunks c ON c.id = v.rowid
+  JOIN documents d ON d.id = c.document_id
+  LEFT JOIN scopes s ON s.id = d.scope_id
+  WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
+  ORDER BY v.distance
+`;
+
+const DOC_FTS_UNSCOPED = `
+  SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
+         d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, f.rank AS rank
+  FROM document_chunks_fts f
+  JOIN document_chunks c ON c.id = f.rowid
+  JOIN documents d ON d.id = c.document_id
+  LEFT JOIN scopes s ON s.id = d.scope_id
+  WHERE document_chunks_fts MATCH ?
+  ORDER BY f.rank
+  LIMIT ?
+`;
+
+const DOC_FTS_SCOPED = `
+  SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
+         d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, f.rank AS rank
+  FROM document_chunks_fts f
+  JOIN document_chunks c ON c.id = f.rowid
+  JOIN documents d ON d.id = c.document_id
+  LEFT JOIN scopes s ON s.id = d.scope_id
+  WHERE document_chunks_fts MATCH ? AND s.name = ?
+  ORDER BY f.rank
+  LIMIT ?
+`;
