@@ -8,6 +8,13 @@ import { ValidationError } from '../../core/errors.js';
 const AUDIT_OUTCOMES = ['ok', 'denied', 'error'] as const;
 type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 
+/** Clip a single field so a fat `args` blob doesn't blow up the terminal.
+ *  Truncation is display-only — the row in the DB keeps the full value. */
+const AUDIT_DISPLAY_MAX = 200;
+function truncate(s: string, max = AUDIT_DISPLAY_MAX): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
 /** Parse + validate `--outcome` at option-parse time. Rejecting invalid
  *  values early (as a ValidationError → exit 64) is friendlier than
  *  silently returning an empty result set. */
@@ -40,8 +47,8 @@ export function registerAuditCommands(program: Command): void {
           if (rows.length === 0) return console.log('(empty)');
           for (const r of rows) {
             const when = new Date(r.ts).toISOString();
-            const args = JSON.stringify(r.args);
-            const err = r.error ? `  err=${r.error}` : '';
+            const args = truncate(JSON.stringify(r.args));
+            const err = r.error ? `  err=${truncate(r.error)}` : '';
             console.log(
               `${when}  ${r.toolName.padEnd(16)} ${r.mcpTool.padEnd(20)} ${r.outcome.padEnd(6)} ${r.durationMs}ms  args=${args}${err}`
             );

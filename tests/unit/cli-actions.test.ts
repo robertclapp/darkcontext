@@ -120,4 +120,19 @@ describe('CLI actions (direct invocation)', () => {
       )
     ).rejects.toThrow(/smaller than chunk-size/);
   });
+
+  it('runIngest prints a one-line summary on success', async () => {
+    const { runIngest } = await import('../../src/cli/commands/ingest.js');
+    const { writeFileSync } = await import('node:fs');
+    const tmpFile = join(dir, 'ok.txt');
+    writeFileSync(tmpFile, 'hello world — enough content to chunk');
+    const cap = capture();
+    await runIngest(
+      tmpFile,
+      { db: dbPath, mime: 'text/plain', chunkSize: 100, chunkOverlap: 10 },
+      cap.write
+    );
+    // Shape: `#<id> [<scope>] <title> — <n> chunks`
+    expect(cap.lines[0]).toMatch(/^#\d+ \[default\] ok\.txt — \d+ chunks$/);
+  });
 });

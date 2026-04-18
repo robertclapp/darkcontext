@@ -157,8 +157,10 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     };
   } catch (err) {
     // Startup failure path: tear down anything we successfully opened
-    // before the throw, in reverse order, and swallow secondary errors
-    // so the primary (the actual cause) propagates.
+    // before the throw, in reverse order. Every individual teardown is
+    // guarded so a secondary error can't mask the primary `err` that
+    // the caller actually needs to see (e.g. EADDRINUSE would be useless
+    // if a trailing ctx.close() threw first).
     try {
       await closeTransport(transport);
     } catch {
@@ -171,7 +173,11 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
         /* best-effort */
       }
     }
-    ctx.close();
+    try {
+      ctx.close();
+    } catch {
+      /* best-effort */
+    }
     throw err;
   }
 }

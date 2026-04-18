@@ -3,6 +3,7 @@ import {
   ConfigError,
   DarkContextError,
   NotFoundError,
+  ScopeDeniedError,
   ValidationError,
 } from '../core/errors.js';
 
@@ -13,10 +14,11 @@ import {
  * production behavior and the fixture).
  *
  * Codes:
- *   64 EX_USAGE     — ValidationError  (bad arguments, malformed input)
- *   66 EX_NOINPUT   — NotFoundError    (requested entity missing)
- *   77 EX_NOPERM    — AuthError        (bearer missing / invalid / unknown)
- *   78 EX_CONFIG    — ConfigError      (env / store / schema wrong)
+ *   64 EX_USAGE     — ValidationError     (bad arguments, malformed input)
+ *   66 EX_NOINPUT   — NotFoundError       (requested entity missing)
+ *   77 EX_NOPERM    — AuthError           (bearer missing / invalid / unknown)
+ *                    | ScopeDeniedError   (tool cannot read/write that scope)
+ *   78 EX_CONFIG    — ConfigError         (env / store / schema wrong)
  *    1 — any other DarkContextError subtype
  *    2 — unexpected (bug or upstream failure)
  */
@@ -24,6 +26,7 @@ export function exitCodeFor(err: unknown): number {
   if (err instanceof ValidationError) return 64;
   if (err instanceof NotFoundError) return 66;
   if (err instanceof AuthError) return 77;
+  if (err instanceof ScopeDeniedError) return 77;
   if (err instanceof ConfigError) return 78;
   if (err instanceof DarkContextError) return 1;
   return 2;

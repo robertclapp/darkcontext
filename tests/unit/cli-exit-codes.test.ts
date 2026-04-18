@@ -5,6 +5,7 @@ import {
   ConfigError,
   DarkContextError,
   NotFoundError,
+  ScopeDeniedError,
   ValidationError,
 } from '../../src/core/errors.js';
 import { exitCodeFor } from '../../src/cli/exit-codes.js';
@@ -27,6 +28,10 @@ describe('CLI exit code mapping', () => {
 
   it('maps AuthError to 77 (EX_NOPERM)', () => {
     expect(exitCodeFor(new AuthError('no token'))).toBe(77);
+  });
+
+  it('maps ScopeDeniedError to 77 (EX_NOPERM) — permission-denied shares the AuthError code', () => {
+    expect(exitCodeFor(new ScopeDeniedError('no access', 'read', 'alice'))).toBe(77);
   });
 
   it('maps ConfigError to 78 (EX_CONFIG)', () => {
