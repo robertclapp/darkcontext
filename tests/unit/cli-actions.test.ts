@@ -9,6 +9,7 @@ import { runRecall } from '../../src/cli/commands/recall.js';
 import { runForget } from '../../src/cli/commands/forget.js';
 import { runList } from '../../src/cli/commands/list.js';
 import { runReindex } from '../../src/cli/commands/reindex.js';
+import { runPrune } from '../../src/cli/commands/prune.js';
 
 /**
  * CLI actions are pure functions. Each takes an output writer so tests can
@@ -134,5 +135,33 @@ describe('CLI actions (direct invocation)', () => {
     );
     // Shape: `#<id> [<scope>] <title> — <n> chunks`
     expect(cap.lines[0]).toMatch(/^#\d+ \[default\] ok\.txt — \d+ chunks$/);
+  });
+
+  it('runPrune reports "nothing to prune" when no retention rules exist', async () => {
+    const cap = capture();
+    await runPrune({ db: dbPath }, cap.write);
+    expect(cap.lines[0]).toBe('no scopes have retention rules configured — nothing to prune');
+  });
+
+  it('runPrune --dry-run describes what would be deleted per scope', async () => {
+    // Seed a scope with retention and aged content.
+    const { AppContext } = await import('../../src/core/context.js');
+    const ctx = AppContext.open({ dbPath, embeddings: 'stub' });
+    try {
+      ctx.retention.set('chat', 3);
+      await ctx.memories.remember({ content: 'old', scope: 'chat' });
+      ctx.db.raw
+        .prepare('UPDATE memories SET created_at = ?')
+        .run(Date.now() - 100 * 86_400_000);
+    } finally {
+      ctx.close();
+    }
+
+    const cap = capture();
+    await runPrune({ db: dbPath, dryRun: true }, cap.write);
+    expect(cap.lines[0]).toMatch(/chat \(retention 3d, cutoff .*\): would delete memories=1/);
+    expect(cap.lines.at(-1)).toBe(
+      'total: would delete memories=1 documents=0 conversations=0 workspace_items=0'
+    );
   });
 });
