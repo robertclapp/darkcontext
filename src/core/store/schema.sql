@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS scopes (
   description TEXT
 );
 
+-- Per-scope retention policy. Rows older than `now - retention_days*86400000`
+-- in content tables get removed by `dcx prune`. A row here is OPT-IN:
+-- scopes with no row retain data forever. The table is separate from
+-- `scopes` so the additive-only schema rule still holds for existing
+-- databases (adding a column to `scopes` wouldn't apply to stores that
+-- predate it).
+CREATE TABLE IF NOT EXISTS scope_retention (
+  scope_id       INTEGER PRIMARY KEY REFERENCES scopes(id) ON DELETE CASCADE,
+  retention_days INTEGER NOT NULL CHECK (retention_days > 0),
+  updated_at     INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tool_scopes (
   tool_id   INTEGER NOT NULL REFERENCES tools(id)  ON DELETE CASCADE,
   scope_id  INTEGER NOT NULL REFERENCES scopes(id) ON DELETE CASCADE,

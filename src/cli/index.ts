@@ -25,6 +25,7 @@ import { registerExport } from './commands/export.js';
 import { registerShow } from './commands/show.js';
 import { registerVacuum } from './commands/vacuum.js';
 import { registerConnect } from './commands/connect.js';
+import { registerPrune } from './commands/prune.js';
 
 const program = new Command();
 program
@@ -52,6 +53,7 @@ registerExport(program);
 registerShow(program);
 registerVacuum(program);
 registerConnect(program);
+registerPrune(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

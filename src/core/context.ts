@@ -9,6 +9,7 @@ import { Conversations } from './conversations/index.js';
 import { Scopes } from './scopes/index.js';
 import { Tools } from './tools/index.js';
 import type { ToolWithGrants } from './tools/index.js';
+import { Retention } from './retention/index.js';
 import { AuditLog } from './audit/index.js';
 import type { EmbeddingProvider, ProviderKind } from './embeddings/index.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
@@ -41,6 +42,7 @@ export class AppContext {
   readonly conversations: Conversations;
   readonly scopes: Scopes;
   readonly tools: Tools;
+  readonly retention: Retention;
 
   private closed = false;
 
@@ -58,6 +60,12 @@ export class AppContext {
     this.conversations = new Conversations(this.db, this.embeddings);
     this.scopes = new Scopes(this.db);
     this.tools = new Tools(this.db);
+    this.retention = new Retention(
+      this.db,
+      this.memories,
+      this.documents,
+      this.conversations
+    );
   }
 
   /** Open a context from env + optional overrides. Caller owns the lifetime. */
