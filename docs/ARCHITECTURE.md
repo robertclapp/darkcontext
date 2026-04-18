@@ -9,97 +9,110 @@
 │ DarkContext MCP Server                                  │
 │  ├─ transports: stdio, streamable HTTP                  │
 │  ├─ auth: DARKCONTEXT_TOKEN (stdio) / Bearer (http)     │
-│  ├─ ScopeFilter  <-- the SECURITY BOUNDARY              │
-│  ├─ AuditLog: one row per tool invocation (redacted)    │
-│  └─ tools: remember, recall, forget, search_documents,  │
-│            search_history, list_workspaces,             │
-│            get_active_workspace, add_to_workspace       │
+│  ├─ ScopeFilter          <- SECURITY BOUNDARY           │
+│  ├─ withAudit() wrapper  <- every tool call is logged   │
+│  └─ tools: declarative McpToolDef per file              │
+│             aggregated in tools/registry.ts             │
 ├─────────────────────────────────────────────────────────┤
 │ Core domains                                            │
 │  memories   documents   conversations   workspaces      │
 │  embeddings (stub | ollama | onnx)                      │
 │  scopes + tools (identity + grants, sha256 token hash)  │
 │  importers (chatgpt, claude, gemini, generic)           │
+│  audit (fail-closed redaction)                          │
 ├─────────────────────────────────────────────────────────┤
 │ Storage                                                 │
-│  SQLite (better-sqlite3) + sqlite-vec virtual tables    │
-│  ~/.darkcontext/store.db (WAL journal)                  │
-│  optional SQLCipher at rest (see SECURITY.md)           │
+│  SQLite (better-sqlite3)                                │
+│   + sqlite-vec   (semantic; vec0 virtual tables)        │
+│   + FTS5         (lexical; triggers keep it synced)     │
+│  prepared-statement cache (per Database)                │
+│  ~/.darkcontext/store.db (WAL, optional SQLCipher)      │
 └─────────────────────────────────────────────────────────┘
          ▲
          │ admin
-  `dcx` CLI — init/tool/scope/ingest/import/backup/audit/serve
+  `dcx` CLI — init/tool/scope/ingest/import/backup/audit/reindex/serve
 ```
 
 ## Layers
 
+### Foundation (`src/core/`)
+
+- **`config.ts` + `loadConfig(overrides, env)`** — single canonical
+  resolver for every env-derived setting. Tests build config literals;
+  production reads from `process.env`. Bad values surface as
+  `ConfigError` at load time.
+- **`constants.ts`** — named tunables (schema version, chunk size,
+  audit redaction limit, …) with rationale comments so a future reader
+  knows whether a value is load-bearing or arbitrary.
+- **`errors.ts`** — `DarkContextError` hierarchy. MCP + CLI classify
+  by type, never by string-matching.
+- **`context.ts` / `AppContext`** — the DI container. Owns the DB and
+  every domain module. Entry points: `AppContext.open(init)` for
+  caller-owned lifetime and `AppContext.run(init, fn)` for scoped use.
+  `close()` is idempotent. Test fixture and every CLI command are
+  built on top.
+
 ### Storage (`src/core/store/`)
 
-- `schema.sql` is the single source of truth. It is applied with
-  `CREATE TABLE IF NOT EXISTS` on every `openDb`, so the schema file is
-  also the migration path (additive changes only).
-- `db.ts` loads sqlite-vec opportunistically. If the platform binary is
-  missing, the server keeps working — vector operations silently degrade
-  to LIKE-based keyword search.
-- `ensureVecTables` creates three vector tables — `memories_vec`,
-  `document_chunks_vec`, `messages_vec` — all of them `vec0(embedding
-  FLOAT[N])`, where `N` is the dim observed from the first provider
-  response and pinned in the `meta` table. Swapping providers to one with
-  a different dim requires resetting the store or running `dcx reindex`
-  after a manual reset.
-- `scopeHelpers.ts` owns `resolveScopeId` / `defaultScopeId` /
-  `resolveScopeOrDefault` — used by every domain's insert path so scope
-  creation is consistent.
-- `vectorIndex.ts` owns the three tricky invariants around sqlite-vec:
-    - `rowid` must be bound as BigInt (better-sqlite3 binds JS Number as
-      FLOAT, which sqlite-vec rejects).
-    - First successful write pins `embedDim` in `meta`; mismatches throw
-      rather than corrupt the index.
-    - Embedding-provider errors do not roll back the caller's content
-      insert — missing vectors are recoverable with `dcx reindex`.
+- `schema.sql` is the single source of truth. Applied with
+  `CREATE TABLE IF NOT EXISTS` on every `openDb`, so the schema file
+  is also the migration path (additive changes only).
+- `db.ts` runs eight ordered phases: open file → SQLCipher key →
+  pragmas → load sqlite-vec → bootstrap `meta` → read + verify
+  `schema_version` → apply full schema → stamp version. Rejects stores
+  written by a newer binary (`ConfigError`).
+- Three indexing layers, kept in sync by triggers:
+  - `memories_vec` / `document_chunks_vec` / `messages_vec` —
+    sqlite-vec virtual tables (`vec0(embedding FLOAT[N])`), rowid =
+    id of the source row.
+  - `memories_fts` / `document_chunks_fts` / `messages_fts` — FTS5
+    contentless external-content tables for lexical fallback.
+- `vectorIndex.ts` — `write()` (propagates embedding errors) and
+  atomic `reindex(ids, texts)` (embed first, swap inside one tx).
+  Binds rowids as BigInt because better-sqlite3 binds JS Number as
+  FLOAT which sqlite-vec rejects.
+- `preparedCache.ts` — `cached(db, sql)` memoizes prepared statements
+  per-connection. Used on the MCP hot path where the server reuses
+  one Memories/Documents/Conversations instance across many calls.
+- `fts.ts` — `isFtsAvailable` + `buildFtsQuery`, which sanitizes user
+  input against FTS5 operator injection.
+- `scopeHelpers.ts` — `resolveScopeId` / `resolveScopeOrDefault`
+  consolidated so every insert path shares one lookup.
 
-### Domain modules (`src/core/*`)
+### Domain modules
 
-Each module owns: schema mapping, CRUD, vector-or-keyword search, and
-optional embedding calls. They are **unscoped** — they do not know about
-the calling MCP tool. The admin CLI uses them directly; the MCP surface
-always routes through `ScopeFilter`.
-
-- `memories/`   — atomic facts.
-- `documents/`  — chunked long-form content (paragraph/sentence-aware
-  splitter in `chunker.ts`).
-- `conversations/` — imported LLM-chat histories; dedup by `(source,
-  external_id)` so re-imports are idempotent.
-- `workspaces/` — project/session containers; single-active invariant
-  enforced in a transaction.
-- `embeddings/` — `EmbeddingProvider` interface + `stub` (default),
-  `ollama`, `onnx` (lazy-loaded `@xenova/transformers`).
-- `tools/` and `scopes/` — identity model, token generation/hashing.
-- `importers/` — pure, I/O-free parsers for ChatGPT, Claude, Gemini
-  (Takeout JSON), and a generic shape.
-- `audit/` — audit log writer with per-field redaction (any `content`,
-  `text`, `query`, or `body` string is replaced with a length summary).
+Each owns: schema mapping, CRUD, vector-or-FTS5-or-LIKE search, and
+(where applicable) embedding calls. They are **unscoped** — they do
+not know about the calling MCP tool. The admin CLI uses them
+directly; the MCP surface always routes through `ScopeFilter`.
 
 ### MCP (`src/mcp/`)
 
-- `server.ts` — `buildServer(filter, auditor, caller)` assembles the
-  McpServer with all 8 tools and the audit wrapper.
-- `scopeFilter.ts` — the security boundary. Every MCP tool method
-  passes through read/write grant checks before touching the underlying
-  domain. `forget` and cross-scope reads return no-data rather than
-  errors to avoid leaking existence.
+- `scopeFilter.ts` — the security boundary. Methods: `remember`,
+  `recall`, `forget`, `ingestDocument`, `searchDocuments`,
+  `searchHistory`, `listWorkspaces`, `getActiveWorkspace`,
+  `addToWorkspace`. Rules: reads restrict to readable scopes;
+  writes require writable grants; cross-scope deletes return
+  no-data rather than errors to prevent existence leaks.
+  Raises `ScopeDeniedError` for explicit unreadable/unwritable targets.
+- `audit.ts` — `withAudit(auditor, caller, toolName, handler)`.
+  Classifies outcomes structurally (ScopeDeniedError → `denied`,
+  any other throw → `error`). Redacts args using the fail-closed
+  policy in `core/audit/audit.ts`.
+- `tools/types.ts` — `defineTool({...})` with Zod-inferred args.
+  `tools/registry.ts` exports `ALL_MCP_TOOLS` and a single
+  `registerAllMcpTools` loop. Adding a tool = one new file + one
+  line in the array.
 - `auth.ts` — stdio auth reads `DARKCONTEXT_TOKEN` from env.
 - `httpServer.ts` — Streamable HTTP transport behind constant-time
-  bearer check (sha256 comparison). Stateless; one process per tool
-  identity.
-- `audit.ts` — `withAudit` wrapper that times each tool call, classifies
-  the outcome as `ok | denied | error`, redacts args, and appends to the
-  audit log.
+  bearer check (sha256 + `timingSafeEqual`).
 
 ### CLI (`src/cli/`)
 
-Commander tree of admin commands. The CLI never goes through
-`ScopeFilter` — it is the operator's power tool.
+Every command file exports a `runX(args, opts, out)` pure function
+and a thin `registerX(program)` commander wrapper. `withAppContext`
+is the single place that opens an AppContext, runs the action, and
+closes on the way out.
 
 ## Data model
 
@@ -118,23 +131,31 @@ messages         (id, conversation_id, role, content, ts)
 workspaces       (id, name, is_active, scope_id, created_at)
 workspace_items  (id, workspace_id, kind, content, state, updated_at)
 
--- vectors (dim fixed per store)
+-- search indexes (kept in sync by triggers)
 memories_vec         vec0(embedding FLOAT[N])   -- rowid = memories.id
-document_chunks_vec  vec0(embedding FLOAT[N])   -- rowid = document_chunks.id
-messages_vec         vec0(embedding FLOAT[N])   -- rowid = messages.id
+memories_fts         fts5(content)              -- rowid = memories.id
+document_chunks_vec  vec0(embedding FLOAT[N])
+document_chunks_fts  fts5(content)
+messages_vec         vec0(embedding FLOAT[N])
+messages_fts         fts5(content)
 
--- audit
+-- audit + meta
 audit_log        (id, ts, tool_id, tool_name, mcp_tool, args_json, outcome, error, duration_ms)
+meta             (key, value)  -- schema_version, embed_dim
 ```
 
 ## Extending
 
-- New content domain: add schema rows, a `Core/<domain>` module with
-  CRUD + search, new methods on `ScopeFilter`, an MCP tool, a CLI
-  command, and tests. Follow the shape of `memories/`.
-- New importer: implement `Importer` (pure, `parse(raw: string)` →
-  `ImportedConversation[]`), register in `importers/index.ts`, add a
-  fixture + parser test + CLI subcommand. No other layer needs to change.
-- New transport: build a `Transport` from the MCP SDK and call
-  `buildServer(filter, auditor, caller).connect(transport)`. The server
-  is transport-agnostic.
+- **New content domain**: schema rows, a `core/<domain>` module with
+  CRUD + search + VectorIndex, new methods on `ScopeFilter`, a new
+  `defineTool` file, registry entry, CLI command, tests. Follow
+  `memories/`.
+- **New MCP tool**: `src/mcp/tools/<name>.ts` + one line in
+  `registry.ts`. No other wiring needed.
+- **New importer**: implement the `Importer` interface (pure,
+  `parse(raw)` → `ImportedConversation[]`), register in
+  `importers/index.ts`, add a fixture + parser test + CLI subcommand.
+- **New transport**: build a `Transport`, call
+  `buildServer(filter, auditor).connect(transport)`.
+- **New eval**: add `evals/<name>/run.ts` using `harness.ts`. Add an
+  `eval:<name>` npm script.
