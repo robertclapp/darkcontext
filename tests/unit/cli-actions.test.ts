@@ -47,6 +47,30 @@ describe('CLI actions (direct invocation)', () => {
     expect(cap.lines[1]).toBe('  tags: greeting');
   });
 
+  it('runRemember --dedup merges a near-duplicate into the same row', async () => {
+    await runRemember('Descale every 60 shots', { db: dbPath, kind: 'fact' }, () => undefined);
+    const cap = capture();
+    await runRemember(
+      'Descale every 60 shots',
+      { db: dbPath, kind: 'fact', dedup: true, tags: 'coffee' },
+      cap.write
+    );
+    expect(cap.lines[0]).toMatch(/^merged into #\d+ \[default\] Descale every 60 shots$/);
+    expect(cap.lines[1]).toBe('  tags: coffee');
+  });
+
+  it('runRemember --dedup --dedup-distance 0 disables merging', async () => {
+    await runRemember('same string', { db: dbPath, kind: 'fact' }, () => undefined);
+    const cap = capture();
+    await runRemember(
+      'same string',
+      { db: dbPath, kind: 'fact', dedup: true, dedupDistance: 0 },
+      cap.write
+    );
+    // Threshold 0 rejects every candidate, so we expect a fresh "stored" row.
+    expect(cap.lines[0]).toMatch(/^stored #\d+ \[default\] same string$/);
+  });
+
   it('runRecall returns (no matches) when the store is empty', async () => {
     const cap = capture();
     await runInit({ db: dbPath }, () => undefined);

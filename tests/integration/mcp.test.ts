@@ -5,6 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { buildServer } from '../../src/mcp/server.js';
 import { ScopeFilter } from '../../src/mcp/scopeFilter.js';
 import type { ToolWithGrants } from '../../src/core/tools/index.js';
+import { loadConfig } from '../../src/core/config.js';
 import { makeFixture, type Fixture } from '../helpers/factory.js';
 
 function fakeTool(name: string, grants: Array<{ scope: string; r: boolean; w: boolean }>): ToolWithGrants {
@@ -35,7 +36,7 @@ async function connectPair(filter: ScopeFilter, recorded?: RecordedAudit[]): Pro
       });
     },
   };
-  const server = buildServer(filter, auditor);
+  const server = buildServer(filter, auditor, loadConfig());
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0.0.1' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -62,6 +63,27 @@ describe('MCP integration', () => {
       'search_documents',
       'search_history',
     ]);
+    await client.close();
+  });
+
+  it('remember with dedup:true merges a near-duplicate in the same scope', async () => {
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const client = await connectPair(filter);
+
+    const first = await client.callTool({
+      name: 'remember',
+      arguments: { content: 'Espresso descale every 60 shots' },
+    });
+    const second = await client.callTool({
+      name: 'remember',
+      arguments: { content: 'Espresso descale every 60 shots', dedup: true },
+    });
+    const firstStruct = first.structuredContent as { id: number; merged: boolean };
+    const secondStruct = second.structuredContent as { id: number; merged: boolean };
+    expect(firstStruct.merged).toBe(false);
+    expect(secondStruct.merged).toBe(true);
+    expect(secondStruct.id).toBe(firstStruct.id);
+    expect(fx.memories.list()).toHaveLength(1);
     await client.close();
   });
 

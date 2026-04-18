@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { AuditSink } from '../../core/audit/index.js';
+import type { Config } from '../../core/config.js';
 
 import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
@@ -34,10 +35,11 @@ export const ALL_MCP_TOOLS: readonly McpToolDef[] = [
 export function registerAllMcpTools(
   server: McpServer,
   filter: ScopeFilter,
-  auditor: AuditSink
+  auditor: AuditSink,
+  config: Config
 ): void {
   const caller = filter.caller;
-  const toolCtx = { filter };
+  const toolCtx = { filter, config };
   for (const tool of ALL_MCP_TOOLS) {
     server.registerTool(
       tool.name,

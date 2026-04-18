@@ -1,4 +1,10 @@
-import type { Memories, Memory, NewMemory, RecallHit } from '../core/memories/index.js';
+import type {
+  Memories,
+  Memory,
+  NewMemory,
+  RecallHit,
+  RememberOrMergeResult,
+} from '../core/memories/index.js';
 import type {
   Documents,
   DocumentChunkHit,
@@ -95,6 +101,21 @@ export class ScopeFilter {
   async remember(input: NewMemory): Promise<Memory> {
     const scope = this.requireWritableScope(input.scope);
     return this.memories.remember({ ...input, scope });
+  }
+
+  /**
+   * Dedup-aware remember. Resolves the writable scope first (so a caller
+   * without write access can't even probe for duplicates), then delegates
+   * to `Memories.rememberOrMerge`. `threshold` is the max vector distance
+   * at which a candidate is treated as a duplicate; pass the config
+   * default from the MCP layer.
+   */
+  async rememberOrMerge(
+    input: NewMemory,
+    threshold?: number
+  ): Promise<RememberOrMergeResult> {
+    const scope = this.requireWritableScope(input.scope);
+    return this.memories.rememberOrMerge({ ...input, scope }, threshold);
   }
 
   async recall(query: string, opts: { limit?: number; scope?: string } = {}): Promise<RecallHit[]> {
