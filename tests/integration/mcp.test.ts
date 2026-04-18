@@ -31,7 +31,7 @@ describe('MCP integration', () => {
   afterEach(() => fx.cleanup());
 
   it('advertises all M2+M3 tools', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
     const client = await connectPair(filter);
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -43,12 +43,13 @@ describe('MCP integration', () => {
       'recall',
       'remember',
       'search_documents',
+      'search_history',
     ]);
     await client.close();
   });
 
   it('remember → recall round-trip through MCP', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
     const client = await connectPair(filter);
 
     const remembered = await client.callTool({
@@ -69,7 +70,7 @@ describe('MCP integration', () => {
   });
 
   it('scope denial surfaces as a tool error (not a protocol error)', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
     const client = await connectPair(filter);
 
     const res = await client.callTool({
@@ -89,7 +90,7 @@ describe('MCP integration', () => {
     await fx.memories.remember({ content: 'alice-secret', scope: 'alice' });
     await fx.memories.remember({ content: 'bob-secret', scope: 'bob' });
 
-    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces });
+    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
     const client = await connectPair(bobOnly);
 
     const res = await client.callTool({ name: 'recall', arguments: { query: 'secret', limit: 10 } });
@@ -101,7 +102,7 @@ describe('MCP integration', () => {
 
   it('forget silently no-ops across scope boundaries (no existence leak)', async () => {
     const m = await fx.memories.remember({ content: 'protected', scope: 'alice' });
-    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces });
+    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
     const client = await connectPair(bobOnly);
 
     const res = await client.callTool({ name: 'forget', arguments: { id: m.id } });

@@ -78,8 +78,9 @@ export function setEmbedDim(db: Database.Database, dim: number): void {
 
 export function ensureVecTables(db: Database.Database, dim: number): void {
   if (dim <= 0) return;
-  // memory_id / chunk_id are mapped to sqlite-vec's implicit rowid — inserts
-  // use the `rowid` alias, which keeps binding order PK-first, blob-second.
+  // memory_id / chunk_id / message_id are mapped to sqlite-vec's implicit
+  // rowid — inserts use the `rowid` alias, which keeps binding order
+  // PK-first, blob-second.
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
        embedding FLOAT[${dim}]
@@ -87,6 +88,11 @@ export function ensureVecTables(db: Database.Database, dim: number): void {
   );
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_vec USING vec0(
+       embedding FLOAT[${dim}]
+     );`
+  );
+  db.exec(
+    `CREATE VIRTUAL TABLE IF NOT EXISTS messages_vec USING vec0(
        embedding FLOAT[${dim}]
      );`
   );

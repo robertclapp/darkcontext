@@ -11,6 +11,11 @@ import type {
   Workspaces,
   NewWorkspaceItem,
 } from '../core/workspace/index.js';
+import type {
+  Conversations,
+  HistoryHit,
+  HistorySearchOptions,
+} from '../core/conversations/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
 
 /**
@@ -44,12 +49,14 @@ export interface FilterDeps {
   memories: Memories;
   documents: Documents;
   workspaces: Workspaces;
+  conversations: Conversations;
 }
 
 export class ScopeFilter {
   private readonly memories: Memories;
   private readonly documents: Documents;
   private readonly workspaces: Workspaces;
+  private readonly conversations: Conversations;
 
   constructor(
     private readonly tool: ToolWithGrants,
@@ -58,6 +65,7 @@ export class ScopeFilter {
     this.memories = deps.memories;
     this.documents = deps.documents;
     this.workspaces = deps.workspaces;
+    this.conversations = deps.conversations;
   }
 
   get callerName(): string {
@@ -219,6 +227,31 @@ export class ScopeFilter {
     if (!active) return null;
     if (active.scope === null || !readable.has(active.scope)) return null;
     return active;
+  }
+
+  // ---------- Conversation history ----------
+
+  async searchHistory(
+    query: string,
+    opts: HistorySearchOptions = {}
+  ): Promise<HistoryHit[]> {
+    const readable = new Set(this.readableScopes());
+    if (readable.size === 0) return [];
+
+    if (opts.scope !== undefined) {
+      if (!readable.has(opts.scope)) {
+        throw new ScopeDeniedError(
+          `tool '${this.tool.name}' cannot read scope '${opts.scope}'`,
+          'read',
+          opts.scope
+        );
+      }
+      return this.conversations.search(query, opts);
+    }
+
+    const limit = opts.limit ?? 10;
+    const raw = await this.conversations.search(query, { ...opts, limit: limit * 4 });
+    return raw.filter((h) => h.scope !== null && readable.has(h.scope)).slice(0, limit);
   }
 
   addToWorkspace(item: NewWorkspaceItem & { workspaceId?: number }): WorkspaceItem {

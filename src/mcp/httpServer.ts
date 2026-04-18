@@ -6,6 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Memories } from '../core/memories/index.js';
 import { Documents } from '../core/documents/index.js';
 import { Workspaces } from '../core/workspace/index.js';
+import { Conversations } from '../core/conversations/index.js';
 import { Tools } from '../core/tools/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
 import { openDb } from '../core/store/db.js';
@@ -48,6 +49,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
   const memories = new Memories(db, embeddings);
   const documents = new Documents(db, embeddings);
   const workspaces = new Workspaces(db);
+  const conversations = new Conversations(db, embeddings);
   const toolsStore = new Tools(db);
 
   const callerTool = toolsStore.authenticate(token);
@@ -56,7 +58,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     throw new Error('Provided token does not match any registered tool.');
   }
 
-  const filter = new ScopeFilter(callerTool, { memories, documents, workspaces });
+  const filter = new ScopeFilter(callerTool, { memories, documents, workspaces, conversations });
   const mcpServer = buildServer(filter);
   // Stateless mode: the SDK signals this by the generator being absent.
   // The type demands a function under exactOptionalPropertyTypes; the runtime

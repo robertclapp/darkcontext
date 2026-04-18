@@ -6,6 +6,7 @@ import { openDb, type DarkContextDb } from '../../src/core/store/db.js';
 import { Memories } from '../../src/core/memories/index.js';
 import { Documents } from '../../src/core/documents/index.js';
 import { Workspaces } from '../../src/core/workspace/index.js';
+import { Conversations } from '../../src/core/conversations/index.js';
 import { Tools } from '../../src/core/tools/index.js';
 import { StubEmbeddingProvider } from '../../src/core/embeddings/stub.js';
 
@@ -15,6 +16,7 @@ export interface Fixture {
   memories: Memories;
   documents: Documents;
   workspaces: Workspaces;
+  conversations: Conversations;
   tools: Tools;
   cleanup: () => void;
 }
@@ -26,6 +28,7 @@ export function makeFixture(): Fixture {
   const memories = new Memories(db, embeddings);
   const documents = new Documents(db, embeddings);
   const workspaces = new Workspaces(db);
+  const conversations = new Conversations(db, embeddings);
   const tools = new Tools(db);
   return {
     dir,
@@ -33,6 +36,7 @@ export function makeFixture(): Fixture {
     memories,
     documents,
     workspaces,
+    conversations,
     tools,
     cleanup: () => {
       db.close();

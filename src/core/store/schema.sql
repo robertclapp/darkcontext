@@ -92,6 +92,32 @@ CREATE TABLE IF NOT EXISTS workspace_items (
 CREATE INDEX IF NOT EXISTS idx_wsitems_workspace ON workspace_items(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_wsitems_state     ON workspace_items(state);
 
+-- Conversation history (cross-tool import target)
+CREATE TABLE IF NOT EXISTS conversations (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  source      TEXT    NOT NULL,
+  external_id TEXT,
+  title       TEXT    NOT NULL,
+  started_at  INTEGER NOT NULL,
+  scope_id    INTEGER REFERENCES scopes(id) ON DELETE SET NULL,
+  UNIQUE (source, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_source     ON conversations(source);
+CREATE INDEX IF NOT EXISTS idx_conv_scope      ON conversations(scope_id);
+CREATE INDEX IF NOT EXISTS idx_conv_started_at ON conversations(started_at);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role            TEXT    NOT NULL,
+  content         TEXT    NOT NULL,
+  ts              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_ts           ON messages(ts);
+
 -- Seed a default scope so M1 CLI usage works without extra setup.
 INSERT OR IGNORE INTO scopes (name, description)
 VALUES ('default', 'Default scope for unscoped CLI usage');
