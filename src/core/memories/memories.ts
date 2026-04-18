@@ -5,6 +5,7 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
+import { DEFAULT_SCOPE_NAME } from '../constants.js';
 
 import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
 
@@ -42,7 +43,7 @@ export class Memories {
     const kind = input.kind ?? 'fact';
     const tags = input.tags ?? [];
     const source = input.source ?? null;
-    const scopeName = input.scope ?? 'default';
+    const scopeName = input.scope ?? DEFAULT_SCOPE_NAME;
     const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
 
     const info = this.db.raw

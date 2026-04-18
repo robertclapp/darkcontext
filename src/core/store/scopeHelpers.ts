@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 
+import { DEFAULT_SCOPE_NAME } from '../constants.js';
+
 /**
  * Resolve a scope by name, creating it on demand. Keeps scope names as a
  * first-class caller concern while letting the row-insert paths stay
@@ -20,10 +22,10 @@ export function resolveScopeId(db: Database.Database, name: string): number {
  * on any DB produced by openDb(). Missing it indicates a corrupted store.
  */
 export function defaultScopeId(db: Database.Database): number {
-  const row = db.prepare("SELECT id FROM scopes WHERE name = 'default'").get() as
+  const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(DEFAULT_SCOPE_NAME) as
     | { id: number }
     | undefined;
-  if (!row) throw new Error('default scope missing — did you run migrations?');
+  if (!row) throw new Error(`'${DEFAULT_SCOPE_NAME}' scope missing — did you run migrations?`);
   return row.id;
 }
 

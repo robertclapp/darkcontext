@@ -1,5 +1,6 @@
 import type { DarkContextDb } from '../store/db.js';
 import { ValidationError } from '../errors.js';
+import { DEFAULT_SCOPE_NAME } from '../constants.js';
 
 export interface Scope {
   id: number;
@@ -36,8 +37,8 @@ export class Scopes {
   }
 
   remove(name: string): boolean {
-    if (name === 'default') {
-      throw new ValidationError('name', "the 'default' scope cannot be removed");
+    if (name === DEFAULT_SCOPE_NAME) {
+      throw new ValidationError('name', `the '${DEFAULT_SCOPE_NAME}' scope cannot be removed`);
     }
     const res = this.db.raw.prepare('DELETE FROM scopes WHERE name = ?').run(name);
     return res.changes > 0;

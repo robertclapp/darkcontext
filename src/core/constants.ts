@@ -8,6 +8,12 @@
  *  non-additive change to `schema.sql` so older dcx versions fail loudly. */
 export const SCHEMA_VERSION = 2;
 
+/** Name of the scope seeded by schema.sql. Used wherever a memory /
+ *  document / workspace is created without an explicit scope. Renaming
+ *  this is a breaking change — every existing store's `scopes` row and
+ *  `memories.scope_id` FK would dangle. */
+export const DEFAULT_SCOPE_NAME = 'default';
+
 /** Deterministic stub embedding dimension. 128 is big enough to give the
  *  VectorIndex tests meaningful variance without bloating CI. Picked when
  *  first writing the stub; no downstream code depends on this specific
