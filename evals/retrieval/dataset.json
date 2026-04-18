@@ -1,0 +1,28 @@
+{
+  "memories": [
+    { "id": "coffee-descale", "content": "Descale the espresso boiler every 60 shots with citric acid." },
+    { "id": "coffee-grinder", "content": "Clean the conical burr grinder monthly; wipe retained grounds." },
+    { "id": "coffee-steam", "content": "Purge the steam wand after every milk steaming to avoid crust." },
+    { "id": "tennis-grip",   "content": "Use an eastern forehand grip to generate topspin comfortably." },
+    { "id": "tennis-serve",  "content": "Toss at 1 o'clock and drive up through the ball for more pace." },
+    { "id": "tennis-volley", "content": "Switch to a continental grip for volleys at the net." },
+    { "id": "cal-tz",        "content": "Calendar default timezone is America/Los_Angeles." },
+    { "id": "cal-work",      "content": "Work hours are 09:00 to 17:30 on weekdays." },
+    { "id": "kitchen-faucet","content": "Our kitchen faucet is a Moen 7594; cartridge part number is 1255." },
+    { "id": "kitchen-knife", "content": "Sharpen the chef's knife on the 1000 grit stone monthly." },
+    { "id": "music-guitar",  "content": "Tune the acoustic guitar to standard EADGBE before playing." },
+    { "id": "music-piano",   "content": "Practice scales in C major for 10 minutes before repertoire." }
+  ],
+  "queries": [
+    { "text": "how often do I descale the espresso machine", "expected": "coffee-descale", "topic": "coffee" },
+    { "text": "cleaning my coffee grinder",                  "expected": "coffee-grinder", "topic": "coffee" },
+    { "text": "steam wand maintenance",                      "expected": "coffee-steam",   "topic": "coffee" },
+    { "text": "grip for a topspin forehand",                 "expected": "tennis-grip",    "topic": "tennis" },
+    { "text": "serve toss position",                         "expected": "tennis-serve",   "topic": "tennis" },
+    { "text": "what grip for volleying",                     "expected": "tennis-volley",  "topic": "tennis" },
+    { "text": "my calendar timezone",                        "expected": "cal-tz",         "topic": "cal" },
+    { "text": "standard work hours",                         "expected": "cal-work",       "topic": "cal" },
+    { "text": "moen faucet part number",                     "expected": "kitchen-faucet", "topic": "kitchen" },
+    { "text": "how do I sharpen my knife",                   "expected": "kitchen-knife",  "topic": "kitchen" }
+  ]
+}

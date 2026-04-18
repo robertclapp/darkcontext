@@ -1,0 +1,13 @@
+{
+  "conversations": [
+    {
+      "externalId": "gen-1",
+      "title": "Onboarding checklist",
+      "startedAt": "2026-04-01T09:00:00Z",
+      "messages": [
+        { "role": "user", "content": "Give me an onboarding checklist for new hires.", "ts": "2026-04-01T09:00:00Z" },
+        { "role": "assistant", "content": "1) Laptop, 2) SSO, 3) Slack access, 4) Repo access.", "ts": "2026-04-01T09:00:20Z" }
+      ]
+    }
+  ]
+}
