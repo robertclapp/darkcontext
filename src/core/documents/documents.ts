@@ -1,6 +1,7 @@
 import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
+import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -162,6 +163,42 @@ export class Documents {
   }
 
   private keywordSearch(query: string, limit: number, scope?: string): DocumentChunkHit[] {
+    const ftsQuery = buildFtsQuery(query);
+    if (isFtsAvailable(this.db.raw) && ftsQuery.length > 0) {
+      return this.ftsSearch(ftsQuery, limit, scope);
+    }
+    return this.likeSearch(query, limit, scope);
+  }
+
+  private ftsSearch(ftsQuery: string, limit: number, scope?: string): DocumentChunkHit[] {
+    const sql = `
+      SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
+             d.ingested_at, c.id AS chunk_id, c.chunk_idx, c.content, f.rank AS rank
+      FROM document_chunks_fts f
+      JOIN document_chunks c ON c.id = f.rowid
+      JOIN documents d ON d.id = c.document_id
+      LEFT JOIN scopes s ON s.id = d.scope_id
+      WHERE document_chunks_fts MATCH ?
+        ${scope ? 'AND s.name = ?' : ''}
+      ORDER BY f.rank
+      LIMIT ?
+    `;
+    const params: unknown[] = [ftsQuery];
+    if (scope) params.push(scope);
+    params.push(limit);
+    const rows = this.db.raw.prepare(sql).all(...params) as (ChunkHitRow & { rank: number })[];
+    return rows.map((r) => ({
+      documentId: r.id,
+      title: r.title,
+      scope: r.scope_name,
+      chunkIdx: r.chunk_idx,
+      content: r.content,
+      score: Math.min(1, 1 / (1 + Math.abs(r.rank))),
+      match: 'keyword' as const,
+    }));
+  }
+
+  private likeSearch(query: string, limit: number, scope?: string): DocumentChunkHit[] {
     const like = `%${query.toLowerCase()}%`;
     const sql = `
       SELECT d.id AS id, d.title, d.source_uri, d.mime, s.name AS scope_name,
@@ -184,7 +221,7 @@ export class Documents {
       scope: r.scope_name,
       chunkIdx: r.chunk_idx,
       content: r.content,
-      score: 0.5,
+      score: 0.3,
       match: 'keyword' as const,
     }));
   }

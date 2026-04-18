@@ -1,6 +1,7 @@
 import type { DarkContextDb } from './db.js';
 import { ensureVecTables, setEmbedDim } from './db.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
+import { ConfigError } from '../errors.js';
 
 /**
  * Thin wrapper around a single sqlite-vec virtual table.
@@ -51,8 +52,8 @@ export class VectorIndex {
       this.db.embedDim = dim;
       ensureVecTables(this.db.raw, dim);
     } else if (dim !== this.db.embedDim) {
-      throw new Error(
-        `Embedding dim mismatch on ${this.tableName}: provider returned ${dim}, store is ${this.db.embedDim}. ` +
+      throw new ConfigError(
+        `embedding dim mismatch on ${this.tableName}: provider returned ${dim}, store is ${this.db.embedDim}. ` +
           `Re-initialize the store or run \`dcx reindex\`.`
       );
     }

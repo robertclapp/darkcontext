@@ -60,7 +60,7 @@ describe('MCP tool registry (tools-as-data)', () => {
       { filter }
     );
     expect(result.isError).toBeFalsy();
-    const struct = (result as { structuredContent?: { id: number } }).structuredContent;
+    const struct = result.structuredContent as { id?: number } | undefined;
     expect(struct?.id).toBeGreaterThan(0);
   });
 });

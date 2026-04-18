@@ -1,5 +1,6 @@
 import type { DarkContextDb } from '../store/db.js';
 import type { ToolWithGrants } from '../tools/index.js';
+import { AUDIT_REDACTION_CONTEXT, AUDIT_REDACTION_LIMIT } from '../constants.js';
 
 export interface AuditEntry {
   id: number;
@@ -30,32 +31,39 @@ export interface AuditSink {
 }
 
 /**
- * Redaction rules for `args` before they land in the log. We never persist
- * the full `content` of memories/documents/messages — audit needs to describe
- * what happened without becoming a second copy of the private data.
+ * Redact `args` before they land in the audit log.
+ *
+ * Policy is **fail-closed**: every string value longer than
+ * `AUDIT_REDACTION_LIMIT` is replaced with a short summary regardless of
+ * what key it lives under. This prevents a future MCP tool that names a
+ * field `prompt`, `message`, or `notes` from silently leaking private
+ * content into `audit_log.args_json`.
+ *
+ * Short strings (enums, scope names, kinds, ids-as-strings) pass through
+ * verbatim because they carry operational information the auditor actually
+ * needs.
+ *
+ * Arrays of strings are handled element-wise so a `tags: ['personal']`
+ * array survives but an array of chunk bodies would not.
  */
-const CONTENT_KEYS = new Set(['content', 'text', 'query', 'body']);
-
 export function redactArgs(args: unknown): unknown {
-  if (args === null || typeof args !== 'object') return args;
+  if (args === null || args === undefined) return args;
+  if (typeof args === 'string') return redactString(args);
+  if (typeof args !== 'object') return args;
   if (Array.isArray(args)) return args.map((v) => redactArgs(v));
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-    if (CONTENT_KEYS.has(k) && typeof v === 'string') {
-      out[k] = summarize(v);
-    } else {
-      out[k] = redactArgs(v);
-    }
+    out[k] = redactArgs(v);
   }
   return out;
 }
 
-function summarize(s: string): string {
+function redactString(s: string): string {
+  if (s.length <= AUDIT_REDACTION_LIMIT) return s;
   const trimmed = s.trim();
   if (trimmed.length === 0) return '<empty>';
-  // Keep first + last 16 chars, replace the middle with a length marker.
-  if (trimmed.length <= 40) return `<${trimmed.length}c>`;
-  return `<${trimmed.length}c> ${trimmed.slice(0, 16)}… ${trimmed.slice(-16)}`;
+  const c = AUDIT_REDACTION_CONTEXT;
+  return `<${trimmed.length}c> ${trimmed.slice(0, c)}… ${trimmed.slice(-c)}`;
 }
 
 export class AuditLog implements AuditSink {

@@ -4,6 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as sqliteVec from 'sqlite-vec';
 
+import { SCHEMA_VERSION } from '../constants.js';
+import { ConfigError } from '../errors.js';
+
 import { defaultDbPath } from './paths.js';
 
 export interface OpenDbOptions {
@@ -31,14 +34,27 @@ export interface DarkContextDb {
    * once the embedding provider actually produces a vector.
    */
   embedDim: number;
+  /** Schema version read from the `meta` table on open (or 0 for new stores). */
+  schemaVersion: number;
   close(): void;
 }
 
 /**
  * Open (and if needed, create) the DarkContext SQLite store.
- * `sqlite-vec` is loaded opportunistically — if the platform binary is missing
- * we still return a working DB without vector tables; callers fall back to
- * keyword search.
+ *
+ * Phases (kept strict so the ordering is auditable):
+ *   1. Open file; apply SQLCipher key if present.
+ *   2. Pragmas (WAL, foreign_keys).
+ *   3. Opportunistically load sqlite-vec (missing binary is not fatal).
+ *   4. Ensure the `meta` table exists without touching any other table
+ *      — we must be able to read schema_version before deciding whether
+ *      to run the rest of schema.sql.
+ *   5. Read the stored schema_version. If > SCHEMA_VERSION, refuse to
+ *      proceed: a newer dcx wrote this store and rows may have columns
+ *      this binary doesn't understand.
+ *   6. Apply schema.sql in full (idempotent additive migrations).
+ *   7. Stamp the new schema_version.
+ *   8. Re-create vec0 virtual tables at the stored embed dim (if any).
  */
 export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
   const path = opts.path ?? defaultDbPath();
@@ -47,10 +63,7 @@ export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
   const db = new Database(path, { readonly: opts.readonly ?? false });
 
   let hasCipher = false;
-  const key = opts.encryptionKey ?? process.env.DARKCONTEXT_ENCRYPTION_KEY;
-  if (key) {
-    hasCipher = applyCipherKey(db, key);
-  }
+  if (opts.encryptionKey) hasCipher = applyCipherKey(db, opts.encryptionKey);
 
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -63,7 +76,23 @@ export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
     hasVec = false;
   }
 
-  if (!opts.readonly) runSchema(db);
+  if (!opts.readonly) {
+    // Phase 4: bootstrap `meta` alone, then read version, THEN run the rest.
+    db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  }
+  const previouslyStored = readSchemaVersion(db);
+  if (previouslyStored > SCHEMA_VERSION) {
+    db.close();
+    throw new ConfigError(
+      `database schema version ${previouslyStored} is newer than this binary supports (${SCHEMA_VERSION}). ` +
+        `Upgrade darkcontext before opening this store.`
+    );
+  }
+
+  if (!opts.readonly) {
+    runSchema(db);
+    stampSchemaVersion(db);
+  }
 
   const embedDim = readEmbedDim(db);
   if (hasVec && !opts.readonly) ensureVecTables(db, embedDim);
@@ -73,6 +102,7 @@ export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
     hasVec,
     hasCipher,
     embedDim,
+    schemaVersion: opts.readonly ? previouslyStored || SCHEMA_VERSION : SCHEMA_VERSION,
     close: () => db.close(),
   };
 }
@@ -100,9 +130,24 @@ function applyCipherKey(db: Database.Database, key: string): boolean {
 function runSchema(db: Database.Database): void {
   const sql = readFileSync(SCHEMA_FILE, 'utf8');
   db.exec(sql);
+}
+
+function readSchemaVersion(db: Database.Database): number {
+  try {
+    const row = db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('schema_version') as { value: string } | undefined;
+    return row ? Number(row.value) : 0;
+  } catch {
+    // `meta` doesn't exist yet — brand-new store.
+    return 0;
+  }
+}
+
+function stampSchemaVersion(db: Database.Database): void {
   db.prepare(
-    'INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)'
-  ).run('schema_version', '1');
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run('schema_version', String(SCHEMA_VERSION));
 }
 
 function readEmbedDim(db: Database.Database): number {
@@ -120,9 +165,8 @@ export function setEmbedDim(db: Database.Database, dim: number): void {
 
 export function ensureVecTables(db: Database.Database, dim: number): void {
   if (dim <= 0) return;
-  // memory_id / chunk_id / message_id are mapped to sqlite-vec's implicit
-  // rowid — inserts use the `rowid` alias, which keeps binding order
-  // PK-first, blob-second.
+  // rowid is sqlite-vec's implicit primary key. Insertions bind BigInt
+  // because better-sqlite3 binds JS Number as FLOAT, which sqlite-vec rejects.
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
        embedding FLOAT[${dim}]

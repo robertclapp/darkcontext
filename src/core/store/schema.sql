@@ -136,6 +136,57 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts       ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_tool     ON audit_log(tool_id);
 CREATE INDEX IF NOT EXISTS idx_audit_outcome  ON audit_log(outcome);
 
+-- Lexical search indexes (SQLite FTS5). These are "contentless" external-
+-- content tables: each FTS row is keyed by the rowid of the content table
+-- and stores only the tokenized columns for the matching engine. We keep
+-- these in sync via triggers below so callers don't have to remember.
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  content,
+  tokenize = 'unicode61 remove_diacritics 2',
+  content = 'memories',
+  content_rowid = 'id'
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.id, old.content);
+  INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
+  content,
+  tokenize = 'unicode61 remove_diacritics 2',
+  content = 'document_chunks',
+  content_rowid = 'id'
+);
+
+CREATE TRIGGER IF NOT EXISTS document_chunks_ai AFTER INSERT ON document_chunks BEGIN
+  INSERT INTO document_chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS document_chunks_ad AFTER DELETE ON document_chunks BEGIN
+  INSERT INTO document_chunks_fts(document_chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  content,
+  tokenize = 'unicode61 remove_diacritics 2',
+  content = 'messages',
+  content_rowid = 'id'
+);
+
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+
 -- Seed a default scope so M1 CLI usage works without extra setup.
 INSERT OR IGNORE INTO scopes (name, description)
 VALUES ('default', 'Default scope for unscoped CLI usage');

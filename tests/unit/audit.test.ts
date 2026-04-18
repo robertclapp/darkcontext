@@ -1,37 +1,70 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { AuditLog, redactArgs } from '../../src/core/audit/index.js';
+import { AUDIT_REDACTION_LIMIT } from '../../src/core/constants.js';
 import { makeFixture, type Fixture } from '../helpers/factory.js';
 
-describe('redactArgs', () => {
-  it('summarizes content-bearing string fields', () => {
+describe('redactArgs (fail-closed)', () => {
+  it('replaces long strings with a length + prefix/suffix summary regardless of key', () => {
+    const body = 'This is a private memory about something personal that should not leak into the audit log.';
     const r = redactArgs({
-      content: 'This is a private memory about something personal that should not leak into the audit log.',
+      // Keys were previously "allowed" but now the policy is by length:
+      content: body,
+      notes: body, // not in the old CONTENT_KEYS allowlist — must still redact
+      prompt: body, // ditto
       kind: 'fact',
-      tags: ['personal'],
     }) as Record<string, unknown>;
-    expect(typeof r.content).toBe('string');
     expect(r.content).toMatch(/^<\d+c>/);
+    expect(r.notes).toMatch(/^<\d+c>/);
+    expect(r.prompt).toMatch(/^<\d+c>/);
     expect(r.content).not.toContain('private memory');
     expect(r.kind).toBe('fact');
-    expect(r.tags).toEqual(['personal']);
   });
 
-  it('redacts nested content/query/text/body fields', () => {
-    const r = redactArgs({
-      query: 'espresso descaling schedule',
-      nested: { body: 'hello world this is long enough to be redacted properly', kind: 'note' },
-    }) as { query: string; nested: { body: string; kind: string } };
-    expect(r.query).toMatch(/^<\d+c>/);
-    expect(r.nested.body).toMatch(/^<\d+c>/);
-    expect(r.nested.kind).toBe('note');
-  });
-
-  it('passes through non-string values and short strings', () => {
-    const r = redactArgs({ id: 42, scope: 'work', content: 'short' }) as Record<string, unknown>;
+  it('short strings pass through verbatim (operational data, not secret)', () => {
+    const r = redactArgs({ id: 42, scope: 'work', content: 'short', limit: 10 }) as Record<string, unknown>;
     expect(r.id).toBe(42);
     expect(r.scope).toBe('work');
-    expect(r.content).toBe('<5c>');
+    expect(r.content).toBe('short');
+    expect(r.limit).toBe(10);
+  });
+
+  it('redacts nested long strings', () => {
+    const long = 'a'.repeat(AUDIT_REDACTION_LIMIT + 50);
+    const r = redactArgs({
+      outer: {
+        inner: { body: long },
+        metadata: { tag: 'short' },
+      },
+    }) as { outer: { inner: { body: string }; metadata: { tag: string } } };
+    expect(r.outer.inner.body).toMatch(/^<\d+c>/);
+    expect(r.outer.metadata.tag).toBe('short');
+  });
+
+  it('redacts strings inside arrays element-wise', () => {
+    const long = 'x'.repeat(AUDIT_REDACTION_LIMIT + 10);
+    const r = redactArgs([long, 'short', 42]) as unknown[];
+    expect(String(r[0])).toMatch(/^<\d+c>/);
+    expect(r[1]).toBe('short');
+    expect(r[2]).toBe(42);
+  });
+
+  it('the threshold cut-off is exactly AUDIT_REDACTION_LIMIT', () => {
+    const atLimit = 'a'.repeat(AUDIT_REDACTION_LIMIT);
+    const overLimit = 'a'.repeat(AUDIT_REDACTION_LIMIT + 1);
+    expect(redactArgs({ c: atLimit })).toEqual({ c: atLimit });
+    expect((redactArgs({ c: overLimit }) as { c: string }).c).toMatch(/^<\d+c>/);
+  });
+
+  it('top-level strings are redacted too (not only inside objects)', () => {
+    const long = 'y'.repeat(AUDIT_REDACTION_LIMIT + 20);
+    expect(String(redactArgs(long))).toMatch(/^<\d+c>/);
+    expect(redactArgs('short')).toBe('short');
+  });
+
+  it('null / undefined survive', () => {
+    expect(redactArgs(null)).toBeNull();
+    expect(redactArgs(undefined)).toBeUndefined();
   });
 });
 
@@ -52,7 +85,7 @@ describe('AuditLog', () => {
     });
     const rows = log.list();
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.mcpTool).toBe('recall'); // newest first
+    expect(rows[0]!.mcpTool).toBe('recall');
     expect(rows[1]!.mcpTool).toBe('remember');
   });
 

@@ -1,6 +1,7 @@
 import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
+import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -205,6 +206,47 @@ export class Conversations {
   }
 
   private keywordSearch(query: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
+    const ftsQuery = buildFtsQuery(query);
+    if (isFtsAvailable(this.db.raw) && ftsQuery.length > 0) {
+      return this.ftsSearch(ftsQuery, limit, opts);
+    }
+    return this.likeSearch(query, limit, opts);
+  }
+
+  private ftsSearch(ftsQuery: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
+    const filters: string[] = [];
+    const params: unknown[] = [ftsQuery];
+    if (opts.scope) {
+      filters.push('AND s.name = ?');
+      params.push(opts.scope);
+    }
+    if (opts.source) {
+      filters.push('AND c.source = ?');
+      params.push(opts.source);
+    }
+    params.push(limit);
+    const sql = `
+      SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
+             m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
+             f.rank AS rank
+      FROM messages_fts f
+      JOIN messages m ON m.id = f.rowid
+      JOIN conversations c ON c.id = m.conversation_id
+      LEFT JOIN scopes s ON s.id = c.scope_id
+      WHERE messages_fts MATCH ?
+        ${filters.join(' ')}
+      ORDER BY f.rank
+      LIMIT ?
+    `;
+    const rows = this.db.raw.prepare(sql).all(...params) as (HitRow & { rank: number })[];
+    return rows.map((r) => {
+      const hit = rowToHit(r, 'keyword');
+      hit.score = Math.min(1, 1 / (1 + Math.abs(r.rank)));
+      return hit;
+    });
+  }
+
+  private likeSearch(query: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
     const filters: string[] = [];
     const params: unknown[] = [`%${query.toLowerCase()}%`];
     if (opts.scope) {

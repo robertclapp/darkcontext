@@ -1,6 +1,7 @@
 import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
+import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -37,8 +38,11 @@ export class Memories {
   async remember(input: NewMemory): Promise<Memory> {
     if (!input.content.trim()) throw new ValidationError('content', 'must not be empty');
     const now = Date.now();
+    const kind = input.kind ?? 'fact';
+    const tags = input.tags ?? [];
+    const source = input.source ?? null;
+    const scopeName = input.scope ?? 'default';
     const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
-    const tagsJson = JSON.stringify(input.tags ?? []);
 
     const info = this.db.raw
       .prepare(
@@ -47,15 +51,22 @@ export class Memories {
       )
       .run({
         content: input.content,
-        kind: input.kind ?? 'fact',
-        tags_json: tagsJson,
+        kind,
+        tags_json: JSON.stringify(tags),
         scope_id: scopeId,
-        source: input.source ?? null,
+        source,
         now,
       });
+
     const id = Number(info.lastInsertRowid);
+    // Embed after the insert so a failing provider can't block the write
+    // — the FTS triggers have already indexed the content and a future
+    // `dcx reindex` can populate the vector row.
     await this.vectors.write([id], [input.content]);
-    return this.getById(id);
+
+    // Build the returned row from known values rather than round-tripping
+    // through SELECT. The DB only adds `id`; every other field was set above.
+    return { id, content: input.content, kind, tags, scope: scopeName, source, createdAt: now, updatedAt: now };
   }
 
   getById(id: number): Memory {
@@ -135,7 +146,48 @@ export class Memories {
     }));
   }
 
+  /**
+   * Lexical fallback when vector search is unavailable (no sqlite-vec, or
+   * `embedDim === 0` because nothing has been embedded yet).
+   *
+   * Prefers FTS5 — unicode61 tokenizer, implicit AND across terms, bm25
+   * ranking via the virtual table's `rank` column. Falls back to plain
+   * `LIKE '%query%'` only when FTS5 isn't compiled into SQLite (rare) or
+   * the query sanitizes to empty.
+   */
   private keywordRecall(query: string, limit: number, scope?: string): RecallHit[] {
+    const ftsQuery = buildFtsQuery(query);
+    if (isFtsAvailable(this.db.raw) && ftsQuery.length > 0) {
+      return this.ftsRecall(ftsQuery, limit, scope);
+    }
+    return this.likeRecall(query, limit, scope);
+  }
+
+  private ftsRecall(ftsQuery: string, limit: number, scope?: string): RecallHit[] {
+    const sql = `
+      SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+             m.source, m.created_at, m.updated_at, f.rank AS rank
+      FROM memories_fts f
+      JOIN memories m ON m.id = f.rowid
+      LEFT JOIN scopes s ON s.id = m.scope_id
+      WHERE memories_fts MATCH ?
+        ${scope ? 'AND s.name = ?' : ''}
+      ORDER BY f.rank
+      LIMIT ?
+    `;
+    const params: unknown[] = [ftsQuery];
+    if (scope) params.push(scope);
+    params.push(limit);
+    const rows = this.db.raw.prepare(sql).all(...params) as (MemoryRow & { rank: number })[];
+    // FTS5 rank is negative (more-negative = better). Normalize to (0, 1].
+    return rows.map((r) => ({
+      memory: rowToMemory(r),
+      score: Math.min(1, 1 / (1 + Math.abs(r.rank))),
+      match: 'keyword' as const,
+    }));
+  }
+
+  private likeRecall(query: string, limit: number, scope?: string): RecallHit[] {
     const like = `%${query.toLowerCase()}%`;
     const sql = `
       ${BASE_SELECT}
@@ -150,7 +202,7 @@ export class Memories {
     const rows = this.db.raw.prepare(sql).all(...params) as MemoryRow[];
     return rows.map((r) => ({
       memory: rowToMemory(r),
-      score: 0.5,
+      score: 0.3,
       match: 'keyword' as const,
     }));
   }

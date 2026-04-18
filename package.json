@@ -17,10 +17,13 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "dev": "tsx src/cli/index.ts",
     "dcx": "tsx src/cli/index.ts",
-    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"evals/**/*.ts\"",
+    "typecheck": "tsc -p tsconfig.all.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "eval": "npm run eval:retrieval && npm run eval:security",
+    "eval:retrieval": "tsx evals/retrieval/run.ts",
+    "eval:security": "tsx evals/scope-isolation/run.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

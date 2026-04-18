@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { STUB_EMBED_DIM } from '../constants.js';
+
 import type { EmbeddingProvider } from './provider.js';
 
 /**
@@ -12,7 +14,7 @@ export class StubEmbeddingProvider implements EmbeddingProvider {
   readonly name = 'stub';
   readonly dimension: number;
 
-  constructor(dimension = 128) {
+  constructor(dimension = STUB_EMBED_DIM) {
     this.dimension = dimension;
   }
 

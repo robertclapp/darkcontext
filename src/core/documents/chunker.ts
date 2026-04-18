@@ -1,7 +1,10 @@
+import { DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP } from '../constants.js';
+import { ValidationError } from '../errors.js';
+
 export interface ChunkOptions {
-  /** Target characters per chunk. Default 1200 (~300 tokens). */
+  /** Target characters per chunk. Default `DEFAULT_CHUNK_SIZE`. */
   size?: number;
-  /** Overlap characters between adjacent chunks. Default 150. */
+  /** Overlap characters between adjacent chunks. Default `DEFAULT_CHUNK_OVERLAP`. */
   overlap?: number;
 }
 
@@ -11,10 +14,12 @@ export interface ChunkOptions {
  * smarter tokenizer-aware splitter can replace this behind the same API.
  */
 export function chunkText(text: string, opts: ChunkOptions = {}): string[] {
-  const size = opts.size ?? 1200;
-  const overlap = opts.overlap ?? 150;
-  if (size <= 0) throw new Error('chunk size must be positive');
-  if (overlap < 0 || overlap >= size) throw new Error('overlap must be in [0, size)');
+  const size = opts.size ?? DEFAULT_CHUNK_SIZE;
+  const overlap = opts.overlap ?? DEFAULT_CHUNK_OVERLAP;
+  if (size <= 0) throw new ValidationError('chunk.size', 'must be positive');
+  if (overlap < 0 || overlap >= size) {
+    throw new ValidationError('chunk.overlap', 'must be in [0, size)');
+  }
 
   const normalized = text.replace(/\r\n/g, '\n').trim();
   if (normalized.length === 0) return [];
