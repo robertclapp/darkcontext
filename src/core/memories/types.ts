@@ -32,3 +32,14 @@ export interface RecallOptions {
    *  array means "no readable scopes" → no results. */
   scopes?: readonly string[];
 }
+
+/**
+ * Outcome of `Memories.rememberOrMerge`. `merged: true` means the incoming
+ * content was absorbed into an existing near-duplicate in the same scope —
+ * `memory` is the (possibly updated) existing row. `merged: false` means a
+ * fresh row was inserted and `memory` is the new one.
+ */
+export interface RememberOrMergeResult {
+  memory: Memory;
+  merged: boolean;
+}

@@ -1,17 +1,21 @@
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { ZodRawShape, z } from 'zod';
 
+import type { Config } from '../../core/config.js';
 import type { ScopeFilter } from '../scopeFilter.js';
 
 /**
  * Runtime context passed into every MCP tool handler.
  *
- * Today that's just the scope-filtered domain access. Future hooks
- * (tracing span, feature flags, request id) would go here so handlers
- * never reach out to module-level globals.
+ * Today that's scope-filtered domain access plus the resolved Config
+ * (so handlers can read server-side tunables like `dedupDistance`
+ * without reaching into `process.env`). Future hooks (tracing span,
+ * feature flags, request id) would go here so handlers never reach out
+ * to module-level globals.
  */
 export interface McpToolContext {
   readonly filter: ScopeFilter;
+  readonly config: Config;
 }
 
 /**
