@@ -2,13 +2,21 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { ScopeFilter } from '../scopeFilter.js';
+import { withAudit } from '../audit.js';
+import type { AuditSink } from '../../core/audit/index.js';
+import type { ToolWithGrants } from '../../core/tools/index.js';
 import { toToolError } from './errors.js';
 
 const shape = {
   id: z.number().int().positive().describe('Memory id to delete.'),
 };
 
-export function registerForgetTool(server: McpServer, filter: ScopeFilter): void {
+export function registerForgetTool(
+  server: McpServer,
+  filter: ScopeFilter,
+  auditor: AuditSink,
+  caller: ToolWithGrants
+): void {
   server.registerTool(
     'forget',
     {
@@ -17,7 +25,7 @@ export function registerForgetTool(server: McpServer, filter: ScopeFilter): void
         "Delete a memory by id. Silently no-ops if the memory does not exist or is outside the calling tool's writable scopes (to avoid leaking existence).",
       inputSchema: shape,
     },
-    (args) => {
+    withAudit(auditor, caller, 'forget', (args) => {
       try {
         const ok = filter.forget(args.id);
         return {
@@ -29,6 +37,6 @@ export function registerForgetTool(server: McpServer, filter: ScopeFilter): void
       } catch (err) {
         return toToolError(err);
       }
-    }
+    })
   );
 }

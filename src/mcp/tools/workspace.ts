@@ -2,9 +2,17 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { ScopeFilter } from '../scopeFilter.js';
+import { withAudit } from '../audit.js';
+import type { AuditSink } from '../../core/audit/index.js';
+import type { ToolWithGrants } from '../../core/tools/index.js';
 import { toToolError } from './errors.js';
 
-export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): void {
+export function registerWorkspaceTools(
+  server: McpServer,
+  filter: ScopeFilter,
+  auditor: AuditSink,
+  caller: ToolWithGrants
+): void {
   server.registerTool(
     'list_workspaces',
     {
@@ -12,7 +20,7 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
       description: 'List workspaces the calling tool can read.',
       inputSchema: {},
     },
-    () => {
+    withAudit(auditor, caller, 'list_workspaces', () => {
       try {
         const workspaces = filter.listWorkspaces();
         const lines = workspaces.map(
@@ -30,7 +38,7 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
       } catch (err) {
         return toToolError(err);
       }
-    }
+    })
   );
 
   server.registerTool(
@@ -41,7 +49,7 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
         'Return the currently active workspace if the calling tool can read it; null otherwise.',
       inputSchema: {},
     },
-    () => {
+    withAudit(auditor, caller, 'get_active_workspace', () => {
       try {
         const active = filter.getActiveWorkspace();
         return {
@@ -56,7 +64,7 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
       } catch (err) {
         return toToolError(err);
       }
-    }
+    })
   );
 
   server.registerTool(
@@ -72,7 +80,7 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
         state: z.string().optional().describe("Lifecycle state (default 'open')."),
       },
     },
-    (args) => {
+    withAudit(auditor, caller, 'add_to_workspace', (args) => {
       try {
         const item = filter.addToWorkspace({
           kind: args.kind,
@@ -92,6 +100,6 @@ export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): 
       } catch (err) {
         return toToolError(err);
       }
-    }
+    })
   );
 }

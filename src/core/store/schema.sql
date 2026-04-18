@@ -118,6 +118,24 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_ts           ON messages(ts);
 
+-- Audit log: one row per MCP tool invocation. Never pruned automatically;
+-- operators can trim via `dcx audit prune --before <iso>`.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         INTEGER NOT NULL,
+  tool_id    INTEGER REFERENCES tools(id) ON DELETE SET NULL,
+  tool_name  TEXT    NOT NULL,
+  mcp_tool   TEXT    NOT NULL,
+  args_json  TEXT    NOT NULL,
+  outcome    TEXT    NOT NULL,   -- 'ok' | 'denied' | 'error'
+  error      TEXT,
+  duration_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_ts       ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_tool     ON audit_log(tool_id);
+CREATE INDEX IF NOT EXISTS idx_audit_outcome  ON audit_log(outcome);
+
 -- Seed a default scope so M1 CLI usage works without extra setup.
 INSERT OR IGNORE INTO scopes (name, description)
 VALUES ('default', 'Default scope for unscoped CLI usage');

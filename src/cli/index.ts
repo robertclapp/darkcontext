@@ -15,6 +15,8 @@ import { registerDocumentCommands } from './commands/document.js';
 import { registerWorkspaceCommands } from './commands/workspace.js';
 import { registerImport } from './commands/import.js';
 import { registerHistoryCommands } from './commands/history.js';
+import { registerBackup } from './commands/backup.js';
+import { registerAuditCommands } from './commands/audit.js';
 
 const program = new Command();
 program
@@ -35,6 +37,8 @@ registerDocumentCommands(program);
 registerWorkspaceCommands(program);
 registerImport(program);
 registerHistoryCommands(program);
+registerBackup(program);
+registerAuditCommands(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

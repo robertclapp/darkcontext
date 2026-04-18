@@ -2,6 +2,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { ScopeFilter } from '../scopeFilter.js';
+import { withAudit } from '../audit.js';
+import type { AuditSink } from '../../core/audit/index.js';
+import type { ToolWithGrants } from '../../core/tools/index.js';
 import { toToolError } from './errors.js';
 
 const shape = {
@@ -17,7 +20,12 @@ const shape = {
   source: z.string().optional().describe('Optional source label (e.g. conversation id).'),
 };
 
-export function registerRememberTool(server: McpServer, filter: ScopeFilter): void {
+export function registerRememberTool(
+  server: McpServer,
+  filter: ScopeFilter,
+  auditor: AuditSink,
+  caller: ToolWithGrants
+): void {
   server.registerTool(
     'remember',
     {
@@ -26,7 +34,7 @@ export function registerRememberTool(server: McpServer, filter: ScopeFilter): vo
         "Store a memory (fact, preference, event, note). The memory is scoped to the calling tool's writable scopes. Returns the stored memory id.",
       inputSchema: shape,
     },
-    async (args) => {
+    withAudit(auditor, caller, 'remember', async (args) => {
       try {
         const memory = await filter.remember({
           content: args.content,
@@ -52,6 +60,6 @@ export function registerRememberTool(server: McpServer, filter: ScopeFilter): vo
       } catch (err) {
         return toToolError(err);
       }
-    }
+    })
   );
 }

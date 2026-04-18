@@ -8,6 +8,7 @@ import { Documents } from '../core/documents/index.js';
 import { Workspaces } from '../core/workspace/index.js';
 import { Conversations } from '../core/conversations/index.js';
 import { Tools } from '../core/tools/index.js';
+import { AuditLog } from '../core/audit/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
 import { openDb } from '../core/store/db.js';
 import { hashToken } from '../core/tools/tokens.js';
@@ -59,7 +60,8 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
   }
 
   const filter = new ScopeFilter(callerTool, { memories, documents, workspaces, conversations });
-  const mcpServer = buildServer(filter);
+  const auditor = new AuditLog(db, callerTool);
+  const mcpServer = buildServer(filter, auditor, callerTool);
   // Stateless mode: the SDK signals this by the generator being absent.
   // The type demands a function under exactOptionalPropertyTypes; the runtime
   // accepts `undefined` — cast deliberately.

@@ -3,6 +3,14 @@ import type { Command } from 'commander';
 import { buildContext } from '../context.js';
 import { defaultDbPath } from '../../core/store/paths.js';
 
+function cipherStatus(hasCipher: boolean): string {
+  if (hasCipher) return 'SQLCipher active';
+  if (process.env.DARKCONTEXT_ENCRYPTION_KEY) {
+    return 'key set but SQLCipher not detected — stock better-sqlite3 does not encrypt. See docs/SECURITY.md.';
+  }
+  return 'disabled (set DARKCONTEXT_ENCRYPTION_KEY + a SQLCipher build to enable)';
+}
+
 export function registerDoctor(program: Command): void {
   program
     .command('doctor')
@@ -14,6 +22,7 @@ export function registerDoctor(program: Command): void {
       try {
         console.log(`db path:          ${opts.db ?? defaultDbPath()}`);
         console.log(`sqlite-vec:       ${ctx.db.hasVec ? 'ok' : 'MISSING (falling back to keyword search)'}`);
+        console.log(`encryption:       ${cipherStatus(ctx.db.hasCipher)}`);
         console.log(`embed dim (stored): ${ctx.db.embedDim || '(none yet)'}`);
         console.log(`provider:         ${ctx.embeddings.name}`);
         try {

@@ -7,6 +7,9 @@ import { Documents } from '../core/documents/index.js';
 import { Workspaces } from '../core/workspace/index.js';
 import { Conversations } from '../core/conversations/index.js';
 import { Tools } from '../core/tools/index.js';
+import { AuditLog } from '../core/audit/index.js';
+import type { AuditSink } from '../core/audit/index.js';
+import type { ToolWithGrants } from '../core/tools/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
 import { openDb } from '../core/store/db.js';
 
@@ -36,17 +39,21 @@ export interface StartedServer {
  * connecting it to any transport yet. Exported so tests can pair it with the
  * SDK's in-memory transport.
  */
-export function buildServer(filter: ScopeFilter): McpServer {
+export function buildServer(
+  filter: ScopeFilter,
+  auditor: AuditSink,
+  caller: ToolWithGrants
+): McpServer {
   const server = new McpServer(
     { name: 'darkcontext', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
-  registerRememberTool(server, filter);
-  registerRecallTool(server, filter);
-  registerForgetTool(server, filter);
-  registerSearchDocumentsTool(server, filter);
-  registerSearchHistoryTool(server, filter);
-  registerWorkspaceTools(server, filter);
+  registerRememberTool(server, filter, auditor, caller);
+  registerRecallTool(server, filter, auditor, caller);
+  registerForgetTool(server, filter, auditor, caller);
+  registerSearchDocumentsTool(server, filter, auditor, caller);
+  registerSearchHistoryTool(server, filter, auditor, caller);
+  registerWorkspaceTools(server, filter, auditor, caller);
   return server;
 }
 
@@ -62,8 +69,9 @@ export async function startStdioServer(opts: ServeOptions = {}): Promise<Started
 
   const callerTool = resolveToolFromEnv(toolsStore, opts.env);
   const filter = new ScopeFilter(callerTool, { memories, documents, workspaces, conversations });
+  const auditor = new AuditLog(db, callerTool);
 
-  const server = buildServer(filter);
+  const server = buildServer(filter, auditor, callerTool);
   const transport: Transport = new StdioServerTransport();
   await server.connect(transport);
 

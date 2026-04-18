@@ -17,8 +17,26 @@ function fakeTool(name: string, grants: Array<{ scope: string; r: boolean; w: bo
   };
 }
 
-async function connectPair(filter: ScopeFilter): Promise<Client> {
-  const server = buildServer(filter);
+interface RecordedAudit {
+  mcpTool: string;
+  outcome: string;
+  args: unknown;
+  error: string | null;
+}
+
+async function connectPair(filter: ScopeFilter, recorded?: RecordedAudit[]): Promise<Client> {
+  const caller = (filter as unknown as { tool: ToolWithGrants }).tool;
+  const auditor = {
+    record: (entry: RecordedAudit) => {
+      recorded?.push({
+        mcpTool: entry.mcpTool,
+        outcome: entry.outcome,
+        args: entry.args,
+        error: entry.error,
+      });
+    },
+  };
+  const server = buildServer(filter, auditor, caller);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0.0.1' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -97,6 +115,24 @@ describe('MCP integration', () => {
     const struct = res.structuredContent as { hits: Array<{ content: string; scope: string }> };
     expect(struct.hits.every((h) => h.scope === 'bob')).toBe(true);
     expect(struct.hits.some((h) => h.content === 'alice-secret')).toBe(false);
+    await client.close();
+  });
+
+  it('every tool call writes an audit entry with redacted content', async () => {
+    const recorded: RecordedAudit[] = [];
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const client = await connectPair(filter, recorded);
+
+    await client.callTool({ name: 'remember', arguments: { content: 'a private memory body that should not leak' } });
+    await client.callTool({ name: 'recall', arguments: { query: 'memory' } });
+    await client.callTool({ name: 'remember', arguments: { content: 'cross-scope write', scope: 'work' } });
+
+    expect(recorded.length).toBe(3);
+    expect(recorded[0]!.mcpTool).toBe('remember');
+    expect(recorded[0]!.outcome).toBe('ok');
+    expect(JSON.stringify(recorded[0]!.args)).not.toContain('private memory body');
+    expect(recorded[2]!.outcome).toBe('denied');
+    expect(recorded[2]!.error).toContain('permission denied');
     await client.close();
   });
 

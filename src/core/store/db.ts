@@ -9,6 +9,13 @@ import { defaultDbPath } from './paths.js';
 export interface OpenDbOptions {
   path?: string;
   readonly?: boolean;
+  /**
+   * Optional SQLCipher key. When set we emit `PRAGMA key = ?` before the
+   * first schema statement; this only encrypts the store if the underlying
+   * SQLite build supports SQLCipher (stock better-sqlite3 does not — see
+   * docs/SECURITY.md for the opt-in path).
+   */
+  encryptionKey?: string;
 }
 
 const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), 'schema.sql');
@@ -16,6 +23,7 @@ const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), 'schema.sql');
 export interface DarkContextDb {
   raw: Database.Database;
   hasVec: boolean;
+  hasCipher: boolean;
   embedDim: number;
   close(): void;
 }
@@ -31,6 +39,13 @@ export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
   if (!opts.readonly) mkdirSync(dirname(path), { recursive: true });
 
   const db = new Database(path, { readonly: opts.readonly ?? false });
+
+  let hasCipher = false;
+  const key = opts.encryptionKey ?? process.env.DARKCONTEXT_ENCRYPTION_KEY;
+  if (key) {
+    hasCipher = applyCipherKey(db, key);
+  }
+
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
@@ -50,9 +65,30 @@ export function openDb(opts: OpenDbOptions = {}): DarkContextDb {
   return {
     raw: db,
     hasVec,
+    hasCipher,
     embedDim,
     close: () => db.close(),
   };
+}
+
+/**
+ * Apply a SQLCipher key. Stock better-sqlite3 does NOT support the `key`
+ * pragma, but the call is cheap (returns an empty result set) and we can
+ * detect success by probing `cipher_version`. Callers decide what to do
+ * with a `hasCipher: false` result — the CLI warns loudly in `dcx doctor`.
+ */
+function applyCipherKey(db: Database.Database, key: string): boolean {
+  try {
+    db.pragma(`key = '${key.replace(/'/g, "''")}'`);
+  } catch {
+    return false;
+  }
+  try {
+    const row = db.pragma('cipher_version') as Array<{ cipher_version?: string }>;
+    return Array.isArray(row) && row.length > 0 && !!row[0]?.cipher_version;
+  } catch {
+    return false;
+  }
 }
 
 function runSchema(db: Database.Database): void {
