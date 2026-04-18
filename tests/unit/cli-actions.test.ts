@@ -106,4 +106,18 @@ describe('CLI actions (direct invocation)', () => {
       runReindex({ db: dbPath, only: 'bogus' }, () => undefined)
     ).rejects.toThrow(/unknown kind/);
   });
+
+  it('runIngest rejects chunk-overlap >= chunk-size', async () => {
+    const { runIngest } = await import('../../src/cli/commands/ingest.js');
+    const tmpFile = join(dir, 'sample.txt');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(tmpFile, 'hello world');
+    await expect(
+      runIngest(
+        tmpFile,
+        { db: dbPath, mime: 'text/plain', chunkSize: 100, chunkOverlap: 100 },
+        () => undefined
+      )
+    ).rejects.toThrow(/smaller than chunk-size/);
+  });
 });

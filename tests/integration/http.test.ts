@@ -66,6 +66,30 @@ describe('HTTP transport bearer auth', () => {
     expect(res.status).not.toBe(401);
   });
 
+  it('accepts any case for the Bearer scheme (RFC 7235 case-insensitive)', async () => {
+    for (const scheme of ['Bearer', 'bearer', 'BEARER', 'BeArEr']) {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          authorization: `${scheme} ${token}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'case-test', version: '0.0.1' },
+          },
+        }),
+      });
+      expect(res.status, `scheme=${scheme}`).not.toBe(401);
+    }
+  });
+
   it('rejects HTTP startup if the token does not match any registered tool', async () => {
     await expect(
       startHttpServer({ dbPath, token: 'dcx_ghost_token', port: 0 })

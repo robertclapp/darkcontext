@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 import { defaultStoreDir } from '../../src/core/store/paths.js';
 import {
@@ -35,12 +35,16 @@ describe('review fixes', () => {
 
     it('empty string falls back to the homedir default (not a relative path)', () => {
       process.env.DARKCONTEXT_HOME = '';
-      expect(defaultStoreDir()).toMatch(/\/\.darkcontext$/);
+      const dir = defaultStoreDir();
+      expect(isAbsolute(dir)).toBe(true);
+      expect(basename(dir)).toBe('.darkcontext');
     });
 
     it('whitespace-only is treated the same as empty', () => {
       process.env.DARKCONTEXT_HOME = '   ';
-      expect(defaultStoreDir()).toMatch(/\/\.darkcontext$/);
+      const dir = defaultStoreDir();
+      expect(isAbsolute(dir)).toBe(true);
+      expect(basename(dir)).toBe('.darkcontext');
     });
   });
 

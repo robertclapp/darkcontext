@@ -5,6 +5,20 @@ import { parsePositiveInt, withAppContext } from '../context.js';
 import { AuditLog } from '../../core/audit/index.js';
 import { ValidationError } from '../../core/errors.js';
 
+const AUDIT_OUTCOMES = ['ok', 'denied', 'error'] as const;
+type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
+
+/** Parse + validate `--outcome` at option-parse time. Rejecting invalid
+ *  values early (as a ValidationError → exit 64) is friendlier than
+ *  silently returning an empty result set. */
+function parseOutcome(value: string): AuditOutcome {
+  if ((AUDIT_OUTCOMES as readonly string[]).includes(value)) return value as AuditOutcome;
+  throw new ValidationError(
+    'outcome',
+    `must be one of: ${AUDIT_OUTCOMES.join(', ')} (got: ${value})`
+  );
+}
+
 export function registerAuditCommands(program: Command): void {
   const audit = program.command('audit').description('Inspect the MCP audit log');
 
@@ -13,7 +27,7 @@ export function registerAuditCommands(program: Command): void {
     .description('List recent audit entries (newest first)')
     .option('--limit <n>', 'max rows', parsePositiveInt('limit'), 50)
     .option('--tool <name>', 'filter by calling tool name')
-    .option('--outcome <o>', 'filter by outcome (ok | denied | error)')
+    .option('--outcome <o>', `filter by outcome (${AUDIT_OUTCOMES.join(' | ')})`, parseOutcome)
     .option('--db <path>', 'override database path')
     .action(
       async (opts: CommonCliOptions & { limit: number; tool?: string; outcome?: string }) => {

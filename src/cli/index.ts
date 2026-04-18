@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 
-import {
-  AuthError,
-  ConfigError,
-  DarkContextError,
-  NotFoundError,
-  ValidationError,
-} from '../core/errors.js';
+import { exitCodeFor, formatError } from './exit-codes.js';
 
 import { registerInit } from './commands/init.js';
 import { registerRemember } from './commands/remember.js';
@@ -55,34 +49,3 @@ program.parseAsync(process.argv).catch((err) => {
   console.error(formatError(err));
   process.exit(exitCodeFor(err));
 });
-
-/**
- * Format an error for stderr. For typed DarkContextErrors we prefix with
- * the class name so integrators scripting against `dcx` can distinguish
- * "this tool doesn't exist" from "you passed bad arguments" without
- * parsing free-form messages.
- */
-function formatError(err: unknown): string {
-  if (err instanceof DarkContextError) return `${err.name}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-/**
- * Sysexits-style exit codes. Scripts can branch on these without parsing
- * stderr:
- *   64 EX_USAGE      — user error: bad arguments, malformed input
- *   66 EX_NOINPUT    — requested entity doesn't exist
- *   77 EX_NOPERM     — auth or scope denial
- *   78 EX_CONFIG     — env / store / schema is wrong for this binary
- *    1 generic domain error
- *    2 unexpected (likely a bug)
- */
-function exitCodeFor(err: unknown): number {
-  if (err instanceof ValidationError) return 64;
-  if (err instanceof NotFoundError) return 66;
-  if (err instanceof AuthError) return 77;
-  if (err instanceof ConfigError) return 78;
-  if (err instanceof DarkContextError) return 1;
-  return 2;
-}

@@ -84,5 +84,7 @@ export function registerDocumentCommands(program: Command): void {
     .command('remove <id>')
     .description('Delete a document and its chunks')
     .option('--db <path>', 'override database path')
-    .action(async (id: string, opts: CommonCliOptions) => runDocRemove(Number(id), opts));
+    .action(async (id: string, opts: CommonCliOptions) =>
+      runDocRemove(parsePositiveInt('id')(id), opts)
+    );
 }

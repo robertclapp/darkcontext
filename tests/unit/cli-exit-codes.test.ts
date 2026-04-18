@@ -7,25 +7,14 @@ import {
   NotFoundError,
   ValidationError,
 } from '../../src/core/errors.js';
+import { exitCodeFor } from '../../src/cli/exit-codes.js';
 
 /**
- * Replicates the exit-code mapping in src/cli/index.ts so sysexits-style
- * contracts are covered by a test, not only by visual inspection of the
- * top-level error handler. If either side changes, this test flags it.
- *
- * The DarkContextError branch matters: a typed domain error that isn't
- * one of the four specialized subtypes should exit 1, not 2. Missing
- * this check in an earlier revision meant the test silently tolerated
- * exit-code drift.
+ * Covers the production `exitCodeFor` mapper directly. Previously the
+ * test kept its own copy, which could silently drift from the real CLI
+ * behavior; importing the shared module is the only way to guarantee
+ * the two stay in lockstep.
  */
-function exitCodeFor(err: unknown): number {
-  if (err instanceof ValidationError) return 64;
-  if (err instanceof NotFoundError) return 66;
-  if (err instanceof AuthError) return 77;
-  if (err instanceof ConfigError) return 78;
-  if (err instanceof DarkContextError) return 1;
-  return 2;
-}
 
 describe('CLI exit code mapping', () => {
   it('maps ValidationError to 64 (EX_USAGE)', () => {

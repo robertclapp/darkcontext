@@ -21,9 +21,13 @@ export async function withAppContext<T>(
   opts: CommonCliOptions,
   fn: (ctx: AppContext) => Promise<T> | T
 ): Promise<T> {
+  // Use `!== undefined` rather than a truthy check: an explicit `--db ""`
+  // or `--provider ""` is a caller bug that loadConfig() / the provider
+  // factory should surface, not something we silently replace with the
+  // default. Truly unset options remain absent from the ContextInit.
   const init: ContextInit = {
-    ...(opts.db ? { dbPath: opts.db } : {}),
-    ...(opts.provider ? { embeddings: opts.provider } : {}),
+    ...(opts.db !== undefined ? { dbPath: opts.db } : {}),
+    ...(opts.provider !== undefined ? { embeddings: opts.provider } : {}),
   };
   return AppContext.run(init, fn);
 }

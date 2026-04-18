@@ -122,24 +122,48 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       httpServer,
       port: actualPort,
       close: async () => {
-        // The HTTP listener, the MCP server, and the AppContext are three
-        // separate resources. `ctx.close()` MUST run even if either of
-        // the other two rejects during shutdown, so the DB handle is
-        // always released.
+        // Four independent resources to unwind: HTTP listener, MCP
+        // server, Streamable-HTTP transport, and AppContext. Each close
+        // can throw independently. We attempt ALL of them, remembering
+        // the first failure for re-throw at the end so a later cleanup
+        // failure can't mask the real one. ctx.close() always runs —
+        // the DB handle must not leak even if every other teardown
+        // errored.
+        let primaryErr: unknown;
         try {
           await new Promise<void>((done, reject) =>
             httpServer.close((err) => (err ? reject(err) : done()))
           );
-          if (mcpServer) await mcpServer.close();
-        } finally {
-          ctx.close();
+        } catch (err) {
+          primaryErr = err;
         }
+        try {
+          if (mcpServer) await mcpServer.close();
+        } catch (err) {
+          primaryErr ??= err;
+        }
+        try {
+          await closeTransport(transport);
+        } catch (err) {
+          primaryErr ??= err;
+        }
+        try {
+          ctx.close();
+        } catch (err) {
+          primaryErr ??= err;
+        }
+        if (primaryErr) throw primaryErr;
       },
     };
   } catch (err) {
     // Startup failure path: tear down anything we successfully opened
     // before the throw, in reverse order, and swallow secondary errors
     // so the primary (the actual cause) propagates.
+    try {
+      await closeTransport(transport);
+    } catch {
+      /* best-effort */
+    }
     if (mcpServer) {
       try {
         await mcpServer.close();
@@ -152,10 +176,26 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
   }
 }
 
+/**
+ * The SDK's transport types don't explicitly document a `close()` in
+ * every version; call it only if present. This keeps us forward-
+ * compatible without pinning to an SDK shape we don't own.
+ */
+async function closeTransport(transport: StreamableHTTPServerTransport | undefined): Promise<void> {
+  if (!transport) return;
+  const fn = (transport as { close?: () => Promise<void> | void }).close;
+  if (typeof fn === 'function') await fn.call(transport);
+}
+
 function checkBearer(req: IncomingMessage, expectedHash: string): boolean {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return false;
-  const presented = header.slice('Bearer '.length).trim();
+  if (!header) return false;
+  // RFC 7235 defines authentication schemes as case-insensitive. Accept
+  // any casing of "Bearer" so clients that send `authorization: bearer …`
+  // aren't silently rejected as unauthenticated.
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  if (!match) return false;
+  const presented = match[1]!.trim();
   if (!presented) return false;
   const a = Buffer.from(hashToken(presented), 'hex');
   const b = Buffer.from(expectedHash, 'hex');

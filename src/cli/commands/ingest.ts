@@ -4,7 +4,9 @@ import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import type { CommonCliOptions } from '../context.js';
-import { withAppContext } from '../context.js';
+import { parsePositiveInt, withAppContext } from '../context.js';
+import { DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE } from '../../core/constants.js';
+import { ValidationError } from '../../core/errors.js';
 
 export interface IngestOptions extends CommonCliOptions {
   title?: string;
@@ -19,6 +21,14 @@ export async function runIngest(
   opts: IngestOptions,
   out: (line: string) => void = console.log
 ): Promise<void> {
+  // Commander already validated each value is a positive integer via
+  // parsePositiveInt; cross-field invariants live here.
+  if (opts.chunkOverlap >= opts.chunkSize) {
+    throw new ValidationError(
+      'chunk-overlap',
+      `must be smaller than chunk-size (got overlap=${opts.chunkOverlap}, size=${opts.chunkSize})`
+    );
+  }
   const abs = resolve(path);
   const content = readFileSync(abs, 'utf8');
   await withAppContext(opts, async (ctx) => {
@@ -45,8 +55,8 @@ export function registerIngest(program: Command): void {
     .option('--title <title>', 'override document title (default: filename)')
     .option('--scope <scope>', 'scope to ingest into (created on demand)')
     .option('--mime <mime>', 'MIME type', 'text/plain')
-    .option('--chunk-size <n>', 'characters per chunk', (v) => Number(v), 1200)
-    .option('--chunk-overlap <n>', 'chunk overlap characters', (v) => Number(v), 150)
+    .option('--chunk-size <n>', 'characters per chunk', parsePositiveInt('chunk-size'), DEFAULT_CHUNK_SIZE)
+    .option('--chunk-overlap <n>', 'chunk overlap characters', parsePositiveInt('chunk-overlap'), DEFAULT_CHUNK_OVERLAP)
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .action(async (path: string, opts: IngestOptions) => {
