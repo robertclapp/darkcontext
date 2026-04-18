@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a new capability or enhancement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user-facing problem does this solve? Who hits it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the shape — new MCP tool, CLI command, config flag, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - MCP tools
+        - CLI (`dcx`)
+        - Embeddings
+        - Importers
+        - Storage / schema
+        - Security / scopes
+        - HTTP transport
+        - Docs
+        - Evals
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
