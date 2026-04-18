@@ -6,7 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { AppContext, type ContextInit } from '../core/context.js';
 import { AuthError } from '../core/errors.js';
-import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, SCHEMA_VERSION } from '../core/constants.js';
+import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, SCHEMA_VERSION, VERSION } from '../core/constants.js';
 import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
@@ -83,7 +83,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       if (req.method === 'GET' && req.url === '/healthz') {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ ok: true, version: '0.2.0', schemaVersion: SCHEMA_VERSION }));
+        res.end(JSON.stringify({ ok: true, version: VERSION, schemaVersion: SCHEMA_VERSION }));
         return;
       }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);

@@ -21,13 +21,23 @@ echo "  token: $TOKEN"
 echo "→ start HTTP server on 127.0.0.1:$PORT (background)"
 DARKCONTEXT_TOKEN="$TOKEN" dcx serve --http --port "$PORT" --db "$DB" >/tmp/dcx-serve.log 2>&1 &
 SERVER_PID=$!
-trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+# Handle interactive interrupts (Ctrl+C → SIGINT) and termination (SIGTERM)
+# alongside the normal EXIT path so the background server never outlives
+# the demo script.
+trap 'kill $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true' EXIT INT TERM
 
-# Wait for the bind to finish.
+# Poll /healthz until bind completes. Loud failure if we give up — silent
+# exit made the downstream curl errors confusing to debug.
+READY=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null; then break; fi
+  if curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null; then READY=1; break; fi
   sleep 0.2
 done
+if [ "$READY" -eq 0 ]; then
+  echo "ERROR: dcx serve --http did not bind 127.0.0.1:$PORT within 2s" >&2
+  echo "       see /tmp/dcx-serve.log for details" >&2
+  exit 1
+fi
 
 echo "→ GET /healthz (no auth required)"
 curl -s "http://127.0.0.1:$PORT/healthz" | jq .

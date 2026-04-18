@@ -45,7 +45,7 @@ Initial release. Implements the full plan in `docs/DARKCONTEXT_PLAN.md`
 - `Memories`, `Documents` (chunked), `Conversations` (imported), `Workspaces` — scope-aware CRUD with atomic `reindex` via `VectorIndex`.
 
 **Access control**
-- `Tools` + `Scopes` with sha256-hashed bearer tokens (`dcx_...` format, 43 char base64url body).
+- `Tools` + `Scopes` with sha256-hashed bearer tokens (`dcx_...` format, 43-char base64url body).
 - `ScopeFilter` is the single security boundary — 18 unit tests + an 8-case adversarial eval prove cross-scope isolation.
 
 **MCP surface (8 tools)**

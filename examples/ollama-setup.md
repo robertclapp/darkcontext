@@ -66,8 +66,8 @@ is preserved (see `VectorIndex.reindex` for the atomicity contract).
 dcx doctor --provider ollama
 ```
 
-Should report `embed dim: 768` (or whatever your model produces) and
-`embed sample: ok`. Run the retrieval eval to confirm quality:
+Should report `embed dim (stored): 768` (or whatever your model produces)
+and `embed sample: ok`. Run the retrieval eval to confirm quality:
 
 ```bash
 DARKCONTEXT_EMBEDDINGS=ollama npm run eval:retrieval
