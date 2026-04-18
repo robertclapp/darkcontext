@@ -4,16 +4,24 @@ import type { AuditSink } from '../core/audit/index.js';
 import { redactArgs } from '../core/audit/index.js';
 import type { ToolWithGrants } from '../core/tools/index.js';
 
+import { ScopeDeniedError } from './scopeFilter.js';
+
 /**
- * Wrap an MCP tool handler with audit logging. Every invocation produces an
- * audit row containing the calling tool id, mcp tool name, redacted args,
- * and outcome (ok | denied | error). Redaction strips private content bodies
- * (see core/audit/audit.ts CONTENT_KEYS) — audit should not become a shadow
- * copy of user data.
+ * Wrap an MCP tool handler with audit logging AND uniform error handling.
  *
- * `denied` is distinguished from `error` when the handler returns a tool
- * error whose message starts with "permission denied" — that's the shape
- * ScopeDeniedError produces via toToolError(). Unknown errors are `error`.
+ * Handlers return a success-shaped `CallToolResult`. They do not need to
+ * catch exceptions — this wrapper:
+ *
+ *  - Classifies the outcome by exception type (not string-matching):
+ *    `ScopeDeniedError` → `denied`, any other throw → `error`.
+ *  - Converts denials and unexpected errors to `isError: true` tool
+ *    results, so the MCP client sees a tool error, not a protocol error.
+ *  - Redacts private content fields (see core/audit/audit.ts) before
+ *    writing the audit row.
+ *
+ * This centralizes all three concerns — audit, error classification, and
+ * error presentation — in one place so tool handlers stay focused on
+ * their happy path.
  */
 export function withAudit<TArgs>(
   auditor: AuditSink,
@@ -28,26 +36,24 @@ export function withAudit<TArgs>(
     let result: CallToolResult;
     try {
       result = await handler(args);
-      if (result.isError) {
-        const text = firstText(result);
-        outcome = text.startsWith('permission denied') ? 'denied' : 'error';
-        errorMessage = text;
-      }
     } catch (err) {
-      outcome = 'error';
-      errorMessage = (err as Error).message;
-      auditor.record({
-        ts: start,
-        toolId: callerTool.id,
-        toolName: callerTool.name,
-        mcpTool: mcpToolName,
-        args: redactArgs(args),
-        outcome,
-        error: errorMessage,
-        durationMs: Date.now() - start,
-      });
-      throw err;
+      if (err instanceof ScopeDeniedError) {
+        outcome = 'denied';
+        errorMessage = err.message;
+        result = {
+          isError: true,
+          content: [{ type: 'text', text: `permission denied: ${err.message}` }],
+        };
+      } else {
+        outcome = 'error';
+        errorMessage = err instanceof Error ? err.message : String(err);
+        result = {
+          isError: true,
+          content: [{ type: 'text', text: errorMessage }],
+        };
+      }
     }
+
     auditor.record({
       ts: start,
       toolId: callerTool.id,
@@ -60,11 +66,4 @@ export function withAudit<TArgs>(
     });
     return result;
   };
-}
-
-function firstText(result: CallToolResult): string {
-  if (!Array.isArray(result.content)) return '';
-  const first = result.content[0];
-  if (first && 'text' in first && typeof first.text === 'string') return first.text;
-  return '';
 }

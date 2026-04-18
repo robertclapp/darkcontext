@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 const shape = {
   query: z.string().min(1).describe('Natural-language query to search memories for.'),
@@ -13,13 +12,7 @@ const shape = {
     .string()
     .optional()
     .describe('Restrict to a specific scope (must be readable by the calling tool).'),
-  limit: z
-    .number()
-    .int()
-    .positive()
-    .max(50)
-    .optional()
-    .describe('Max number of hits (default 10, max 50).'),
+  limit: z.number().int().positive().max(50).optional().describe('Max number of hits (default 10, max 50).'),
 };
 
 export function registerRecallTool(
@@ -37,38 +30,34 @@ export function registerRecallTool(
       inputSchema: shape,
     },
     withAudit(auditor, caller, 'recall', async (args) => {
-      try {
-        const hits = await filter.recall(args.query, {
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
-          ...(args.scope ? { scope: args.scope } : {}),
-        });
-        if (hits.length === 0) {
-          return {
-            content: [{ type: 'text' as const, text: 'No matching memories.' }],
-            structuredContent: { hits: [] },
-          };
-        }
-        const lines = hits.map(
-          (h) =>
-            `#${h.memory.id} [${h.memory.scope ?? '-'}] (${h.match} ${h.score.toFixed(3)}) ${h.memory.content}`
-        );
+      const hits = await filter.recall(args.query, {
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.scope ? { scope: args.scope } : {}),
+      });
+      if (hits.length === 0) {
         return {
-          content: [{ type: 'text' as const, text: lines.join('\n') }],
-          structuredContent: {
-            hits: hits.map((h) => ({
-              id: h.memory.id,
-              content: h.memory.content,
-              scope: h.memory.scope,
-              tags: h.memory.tags,
-              kind: h.memory.kind,
-              score: h.score,
-              match: h.match,
-            })),
-          },
+          content: [{ type: 'text' as const, text: 'No matching memories.' }],
+          structuredContent: { hits: [] },
         };
-      } catch (err) {
-        return toToolError(err);
       }
+      const lines = hits.map(
+        (h) =>
+          `#${h.memory.id} [${h.memory.scope ?? '-'}] (${h.match} ${h.score.toFixed(3)}) ${h.memory.content}`
+      );
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
+        structuredContent: {
+          hits: hits.map((h) => ({
+            id: h.memory.id,
+            content: h.memory.content,
+            scope: h.memory.scope,
+            tags: h.memory.tags,
+            kind: h.memory.kind,
+            score: h.score,
+            match: h.match,
+          })),
+        },
+      };
     })
   );
 }

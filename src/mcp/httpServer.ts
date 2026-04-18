@@ -61,7 +61,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
 
   const filter = new ScopeFilter(callerTool, { memories, documents, workspaces, conversations });
   const auditor = new AuditLog(db, callerTool);
-  const mcpServer = buildServer(filter, auditor, callerTool);
+  const mcpServer = buildServer(filter, auditor);
   // Stateless mode: the SDK signals this by the generator being absent.
   // The type demands a function under exactOptionalPropertyTypes; the runtime
   // accepts `undefined` — cast deliberately.

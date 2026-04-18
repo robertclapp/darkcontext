@@ -1,7 +1,6 @@
-import type Database from 'better-sqlite3';
-
 import type { DarkContextDb } from '../store/db.js';
-import { ensureVecTables, setEmbedDim } from '../store/db.js';
+import { VectorIndex } from '../store/vectorIndex.js';
+import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 
 import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
@@ -17,32 +16,43 @@ interface MemoryRow {
   updated_at: number;
 }
 
+const BASE_SELECT = `
+  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+         m.source, m.created_at, m.updated_at
+  FROM memories m
+  LEFT JOIN scopes s ON s.id = m.scope_id
+`;
+
 export class Memories {
+  private readonly vectors: VectorIndex;
+
   constructor(
     private readonly db: DarkContextDb,
     private readonly embeddings: EmbeddingProvider
-  ) {}
+  ) {
+    this.vectors = new VectorIndex(db, embeddings, 'memories_vec');
+  }
 
   async remember(input: NewMemory): Promise<Memory> {
     const now = Date.now();
-    const scopeId = input.scope ? resolveScopeId(this.db.raw, input.scope) : defaultScopeId(this.db.raw);
+    const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const tagsJson = JSON.stringify(input.tags ?? []);
 
-    const stmt = this.db.raw.prepare(
-      `INSERT INTO memories (content, kind, tags_json, scope_id, source, created_at, updated_at)
-       VALUES (@content, @kind, @tags_json, @scope_id, @source, @now, @now)`
-    );
-    const info = stmt.run({
-      content: input.content,
-      kind: input.kind ?? 'fact',
-      tags_json: tagsJson,
-      scope_id: scopeId,
-      source: input.source ?? null,
-      now,
-    });
+    const info = this.db.raw
+      .prepare(
+        `INSERT INTO memories (content, kind, tags_json, scope_id, source, created_at, updated_at)
+         VALUES (@content, @kind, @tags_json, @scope_id, @source, @now, @now)`
+      )
+      .run({
+        content: input.content,
+        kind: input.kind ?? 'fact',
+        tags_json: tagsJson,
+        scope_id: scopeId,
+        source: input.source ?? null,
+        now,
+      });
     const id = Number(info.lastInsertRowid);
-
-    await this.writeVector(id, input.content);
+    await this.vectors.write([id], [input.content]);
     return this.getById(id);
   }
 
@@ -68,11 +78,7 @@ export class Memories {
 
   forget(id: number): boolean {
     const tx = this.db.raw.transaction((memId: number) => {
-      if (this.db.hasVec && this.db.embedDim > 0) {
-        // sqlite-vec requires SQLITE_INTEGER for rowid; better-sqlite3 only
-        // binds JS Numbers as FLOAT, so pass BigInt.
-        this.db.raw.prepare('DELETE FROM memories_vec WHERE rowid = ?').run(BigInt(memId));
-      }
+      this.vectors.deleteOne(memId);
       const res = this.db.raw.prepare('DELETE FROM memories WHERE id = ?').run(memId);
       return res.changes > 0;
     });
@@ -88,6 +94,23 @@ export class Memories {
     return this.keywordRecall(query, limit, opts.scope);
   }
 
+  /**
+   * Re-embed every memory and rewrite `memories_vec`. Used by `dcx reindex`
+   * after swapping embedding providers or recovering from a failed write.
+   */
+  async reindex(): Promise<number> {
+    this.vectors.truncate();
+    const rows = this.db.raw
+      .prepare('SELECT id, content FROM memories ORDER BY id')
+      .all() as Array<{ id: number; content: string }>;
+    if (rows.length === 0) return 0;
+    await this.vectors.write(
+      rows.map((r) => r.id),
+      rows.map((r) => r.content)
+    );
+    return rows.length;
+  }
+
   private vectorRecall(qv: number[], limit: number, scope?: string): RecallHit[] {
     const sql = `
       SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
@@ -100,7 +123,7 @@ export class Memories {
         ${scope ? 'AND s.name = ?' : ''}
       ORDER BY v.distance
     `;
-    const params: unknown[] = [Buffer.from(new Float32Array(qv).buffer), limit];
+    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
     if (scope) params.push(scope);
     const rows = this.db.raw.prepare(sql).all(...params) as (MemoryRow & { distance: number })[];
     return rows.map((r) => ({
@@ -129,44 +152,7 @@ export class Memories {
       match: 'keyword' as const,
     }));
   }
-
-  private async writeVector(memoryId: number, text: string): Promise<void> {
-    if (!this.db.hasVec) return;
-    let vec: number[];
-    try {
-      [vec] = (await this.embeddings.embed([text])) as [number[]];
-    } catch {
-      return;
-    }
-    if (!vec) return;
-
-    if (this.db.embedDim === 0) {
-      setEmbedDim(this.db.raw, vec.length);
-      (this.db as { embedDim: number }).embedDim = vec.length;
-      ensureVecTables(this.db.raw, vec.length);
-    } else if (vec.length !== this.db.embedDim) {
-      throw new Error(
-        `Embedding dim mismatch: provider returned ${vec.length}, store is ${this.db.embedDim}. ` +
-          `Re-initialize the store or keep the same embeddings provider.`
-      );
-    }
-
-    const rowid = BigInt(memoryId);
-    this.db.raw
-      .prepare('DELETE FROM memories_vec WHERE rowid = ?')
-      .run(rowid);
-    this.db.raw
-      .prepare('INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)')
-      .run(rowid, Buffer.from(new Float32Array(vec).buffer));
-  }
 }
-
-const BASE_SELECT = `
-  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-         m.source, m.created_at, m.updated_at
-  FROM memories m
-  LEFT JOIN scopes s ON s.id = m.scope_id
-`;
 
 function rowToMemory(row: MemoryRow): Memory {
   let tags: string[] = [];
@@ -186,21 +172,4 @@ function rowToMemory(row: MemoryRow): Memory {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function resolveScopeId(db: Database.Database, name: string): number {
-  const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(name) as
-    | { id: number }
-    | undefined;
-  if (row) return row.id;
-  const info = db.prepare('INSERT INTO scopes (name) VALUES (?)').run(name);
-  return Number(info.lastInsertRowid);
-}
-
-function defaultScopeId(db: Database.Database): number {
-  const row = db.prepare("SELECT id FROM scopes WHERE name = 'default'").get() as
-    | { id: number }
-    | undefined;
-  if (!row) throw new Error('default scope missing — did you run migrations?');
-  return row.id;
 }

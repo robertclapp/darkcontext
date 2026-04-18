@@ -68,6 +68,15 @@ export class ScopeFilter {
     this.conversations = deps.conversations;
   }
 
+  /**
+   * Return the tool identity this filter was constructed with. Exposed so
+   * callers (server bootstrap, tests) don't need to thread the tool through
+   * a second parameter and can avoid reaching into private state.
+   */
+  get caller(): ToolWithGrants {
+    return this.tool;
+  }
+
   get callerName(): string {
     return this.tool.name;
   }
@@ -255,9 +264,9 @@ export class ScopeFilter {
   }
 
   addToWorkspace(item: NewWorkspaceItem & { workspaceId?: number }): WorkspaceItem {
-    const target = item.workspaceId
-      ? this.workspaces.getById(item.workspaceId)
-      : this.workspaces.getActive();
+    // Target resolution (explicit id vs. active) is a workspace concern;
+    // the filter only decides whether the calling tool may write to it.
+    const target = this.workspaces.resolveTarget(item.workspaceId);
     if (!target) throw new Error('no workspace specified and no active workspace set');
     if (target.scope === null || !this.canWrite(target.scope)) {
       throw new ScopeDeniedError(

@@ -5,7 +5,10 @@ import { Documents } from '../../core/documents/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../../core/embeddings/index.js';
 
 export function registerDocumentCommands(program: Command): void {
-  const doc = program.command('doc').description('Inspect and search documents');
+  const doc = program
+    .command('document')
+    .aliases(['doc'])
+    .description('Inspect and search documents');
 
   doc
     .command('list')

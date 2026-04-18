@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 const shape = {
   query: z.string().min(1).describe('Natural-language query to search past conversations for.'),
@@ -29,42 +28,38 @@ export function registerSearchHistoryTool(
       inputSchema: shape,
     },
     withAudit(auditor, caller, 'search_history', async (args) => {
-      try {
-        const hits = await filter.searchHistory(args.query, {
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
-          ...(args.scope ? { scope: args.scope } : {}),
-          ...(args.source ? { source: args.source } : {}),
-        });
-        if (hits.length === 0) {
-          return {
-            content: [{ type: 'text' as const, text: 'No matching history.' }],
-            structuredContent: { hits: [] },
-          };
-        }
-        const lines = hits.map((h) => {
-          const when = new Date(h.ts).toISOString();
-          return `[${h.match} ${h.score.toFixed(3)}] ${h.source}/${h.title} (${when}) <${h.role}> ${h.content}`;
-        });
+      const hits = await filter.searchHistory(args.query, {
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.scope ? { scope: args.scope } : {}),
+        ...(args.source ? { source: args.source } : {}),
+      });
+      if (hits.length === 0) {
         return {
-          content: [{ type: 'text' as const, text: lines.join('\n') }],
-          structuredContent: {
-            hits: hits.map((h) => ({
-              conversationId: h.conversationId,
-              source: h.source,
-              title: h.title,
-              scope: h.scope,
-              messageId: h.messageId,
-              role: h.role,
-              content: h.content,
-              ts: h.ts,
-              score: h.score,
-              match: h.match,
-            })),
-          },
+          content: [{ type: 'text' as const, text: 'No matching history.' }],
+          structuredContent: { hits: [] },
         };
-      } catch (err) {
-        return toToolError(err);
       }
+      const lines = hits.map((h) => {
+        const when = new Date(h.ts).toISOString();
+        return `[${h.match} ${h.score.toFixed(3)}] ${h.source}/${h.title} (${when}) <${h.role}> ${h.content}`;
+      });
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
+        structuredContent: {
+          hits: hits.map((h) => ({
+            conversationId: h.conversationId,
+            source: h.source,
+            title: h.title,
+            scope: h.scope,
+            messageId: h.messageId,
+            role: h.role,
+            content: h.content,
+            ts: h.ts,
+            score: h.score,
+            match: h.match,
+          })),
+        },
+      };
     })
   );
 }

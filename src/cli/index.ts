@@ -17,6 +17,7 @@ import { registerImport } from './commands/import.js';
 import { registerHistoryCommands } from './commands/history.js';
 import { registerBackup } from './commands/backup.js';
 import { registerAuditCommands } from './commands/audit.js';
+import { registerReindex } from './commands/reindex.js';
 
 const program = new Command();
 program
@@ -39,6 +40,7 @@ registerImport(program);
 registerHistoryCommands(program);
 registerBackup(program);
 registerAuditCommands(program);
+registerReindex(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

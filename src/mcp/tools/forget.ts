@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 const shape = {
   id: z.number().int().positive().describe('Memory id to delete.'),
@@ -26,17 +25,13 @@ export function registerForgetTool(
       inputSchema: shape,
     },
     withAudit(auditor, caller, 'forget', (args) => {
-      try {
-        const ok = filter.forget(args.id);
-        return {
-          content: [
-            { type: 'text' as const, text: ok ? `Forgot #${args.id}.` : `No memory with id ${args.id}.` },
-          ],
-          structuredContent: { deleted: ok, id: args.id },
-        };
-      } catch (err) {
-        return toToolError(err);
-      }
+      const ok = filter.forget(args.id);
+      return {
+        content: [
+          { type: 'text' as const, text: ok ? `Forgot #${args.id}.` : `No memory with id ${args.id}.` },
+        ],
+        structuredContent: { deleted: ok, id: args.id },
+      };
     })
   );
 }

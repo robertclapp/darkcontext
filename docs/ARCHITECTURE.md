@@ -45,10 +45,18 @@
   `document_chunks_vec`, `messages_vec` — all of them `vec0(embedding
   FLOAT[N])`, where `N` is the dim observed from the first provider
   response and pinned in the `meta` table. Swapping providers to one with
-  a different dim requires resetting the store.
-- rowid binding: sqlite-vec rejects JS `Number` as PK (better-sqlite3
-  binds it as FLOAT). We consistently bind with `BigInt(rowid)` on
-  inserts and deletes.
+  a different dim requires resetting the store or running `dcx reindex`
+  after a manual reset.
+- `scopeHelpers.ts` owns `resolveScopeId` / `defaultScopeId` /
+  `resolveScopeOrDefault` — used by every domain's insert path so scope
+  creation is consistent.
+- `vectorIndex.ts` owns the three tricky invariants around sqlite-vec:
+    - `rowid` must be bound as BigInt (better-sqlite3 binds JS Number as
+      FLOAT, which sqlite-vec rejects).
+    - First successful write pins `embedDim` in `meta`; mismatches throw
+      rather than corrupt the index.
+    - Embedding-provider errors do not roll back the caller's content
+      insert — missing vectors are recoverable with `dcx reindex`.
 
 ### Domain modules (`src/core/*`)
 

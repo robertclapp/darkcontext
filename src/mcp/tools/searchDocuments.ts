@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 const shape = {
   query: z.string().min(1).describe('Natural-language query to search documents for.'),
@@ -28,38 +27,33 @@ export function registerSearchDocumentsTool(
       inputSchema: shape,
     },
     withAudit(auditor, caller, 'search_documents', async (args) => {
-      try {
-        const hits = await filter.searchDocuments(args.query, {
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
-          ...(args.scope ? { scope: args.scope } : {}),
-        });
-        if (hits.length === 0) {
-          return {
-            content: [{ type: 'text' as const, text: 'No matching document chunks.' }],
-            structuredContent: { hits: [] },
-          };
-        }
-        const lines = hits.map(
-          (h) =>
-            `[${h.match} ${h.score.toFixed(3)}] ${h.title} [${h.scope ?? '-'}] #${h.chunkIdx}\n${h.content}`
-        );
+      const hits = await filter.searchDocuments(args.query, {
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.scope ? { scope: args.scope } : {}),
+      });
+      if (hits.length === 0) {
         return {
-          content: [{ type: 'text' as const, text: lines.join('\n\n') }],
-          structuredContent: {
-            hits: hits.map((h) => ({
-              documentId: h.documentId,
-              title: h.title,
-              scope: h.scope,
-              chunkIdx: h.chunkIdx,
-              content: h.content,
-              score: h.score,
-              match: h.match,
-            })),
-          },
+          content: [{ type: 'text' as const, text: 'No matching document chunks.' }],
+          structuredContent: { hits: [] },
         };
-      } catch (err) {
-        return toToolError(err);
       }
+      const lines = hits.map(
+        (h) => `[${h.match} ${h.score.toFixed(3)}] ${h.title} [${h.scope ?? '-'}] #${h.chunkIdx}\n${h.content}`
+      );
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n\n') }],
+        structuredContent: {
+          hits: hits.map((h) => ({
+            documentId: h.documentId,
+            title: h.title,
+            scope: h.scope,
+            chunkIdx: h.chunkIdx,
+            content: h.content,
+            score: h.score,
+            match: h.match,
+          })),
+        },
+      };
     })
   );
 }

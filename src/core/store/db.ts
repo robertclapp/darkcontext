@@ -24,6 +24,12 @@ export interface DarkContextDb {
   raw: Database.Database;
   hasVec: boolean;
   hasCipher: boolean;
+  /**
+   * Embedding dimension pinned in the store. 0 before the first write;
+   * set by `setEmbedDim` + `VectorIndex.write` on first successful embed
+   * and frozen thereafter. Mutable because the store only learns the dim
+   * once the embedding provider actually produces a vector.
+   */
   embedDim: number;
   close(): void;
 }

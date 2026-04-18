@@ -7,15 +7,26 @@ import { Conversations } from '../../core/conversations/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../../core/embeddings/index.js';
 import { resolveImporter, type ImporterKind } from '../../core/importers/index.js';
 
+const SUBCOMMANDS: Array<{ kind: ImporterKind; alias?: string }> = [
+  { kind: 'chatgpt' },
+  { kind: 'claude' },
+  { kind: 'gemini' },
+  // Subcommand name matches the source label stored on each conversation.
+  // `json` is accepted as an alias for back-compat with earlier docs.
+  { kind: 'generic', alias: 'json' },
+];
+
 export function registerImport(program: Command): void {
   const imp = program
     .command('import')
     .description('Import conversation history from a supported exporter');
 
-  for (const kind of ['chatgpt', 'claude', 'gemini', 'json'] as ImporterKind[]) {
-    imp
+  for (const { kind, alias } of SUBCOMMANDS) {
+    const cmd = imp
       .command(`${kind} <path>`)
-      .description(describe(kind))
+      .description(describe(kind));
+    if (alias) cmd.aliases([alias]);
+    cmd
       .option('--scope <scope>', 'scope to ingest into (created on demand)')
       .option('--db <path>', 'override database path')
       .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
@@ -34,7 +45,7 @@ export function registerImport(program: Command): void {
               db,
               createEmbeddingProvider(resolveProviderKind(opts.provider))
             );
-            const res = await conversations.ingest(kind === 'json' ? 'generic' : kind, parsed, {
+            const res = await conversations.ingest(kind, parsed, {
               ...(opts.scope ? { scope: opts.scope } : {}),
             });
             console.log(
@@ -53,6 +64,6 @@ function describe(kind: ImporterKind): string {
     case 'chatgpt': return 'Import ChatGPT `conversations.json` from a ChatGPT data export';
     case 'claude':  return 'Import Claude data export (JSON array of conversations with chat_messages)';
     case 'gemini':  return 'Import Gemini activity from Google Takeout (MyActivity.json)';
-    case 'json':    return 'Import the generic DarkContext JSON shape (see docs)';
+    case 'generic': return 'Import the generic DarkContext JSON shape (see docs). Alias: `json`.';
   }
 }

@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 export function registerWorkspaceTools(
   server: McpServer,
@@ -21,23 +20,19 @@ export function registerWorkspaceTools(
       inputSchema: {},
     },
     withAudit(auditor, caller, 'list_workspaces', () => {
-      try {
-        const workspaces = filter.listWorkspaces();
-        const lines = workspaces.map(
-          (w) => `${w.isActive ? '* ' : '  '}${w.name} [${w.scope ?? '-'}]`
-        );
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: workspaces.length === 0 ? '(no workspaces)' : lines.join('\n'),
-            },
-          ],
-          structuredContent: { workspaces },
-        };
-      } catch (err) {
-        return toToolError(err);
-      }
+      const workspaces = filter.listWorkspaces();
+      const lines = workspaces.map(
+        (w) => `${w.isActive ? '* ' : '  '}${w.name} [${w.scope ?? '-'}]`
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: workspaces.length === 0 ? '(no workspaces)' : lines.join('\n'),
+          },
+        ],
+        structuredContent: { workspaces },
+      };
     })
   );
 
@@ -50,20 +45,16 @@ export function registerWorkspaceTools(
       inputSchema: {},
     },
     withAudit(auditor, caller, 'get_active_workspace', () => {
-      try {
-        const active = filter.getActiveWorkspace();
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: active ? `${active.name} [${active.scope ?? '-'}]` : '(no active workspace)',
-            },
-          ],
-          structuredContent: { workspace: active },
-        };
-      } catch (err) {
-        return toToolError(err);
-      }
+      const active = filter.getActiveWorkspace();
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: active ? `${active.name} [${active.scope ?? '-'}]` : '(no active workspace)',
+          },
+        ],
+        structuredContent: { workspace: active },
+      };
     })
   );
 
@@ -81,25 +72,21 @@ export function registerWorkspaceTools(
       },
     },
     withAudit(auditor, caller, 'add_to_workspace', (args) => {
-      try {
-        const item = filter.addToWorkspace({
-          kind: args.kind,
-          content: args.content,
-          ...(args.workspaceId !== undefined ? { workspaceId: args.workspaceId } : {}),
-          ...(args.state ? { state: args.state } : {}),
-        });
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Added ${item.kind} #${item.id} to workspace ${item.workspaceId}.`,
-            },
-          ],
-          structuredContent: { item },
-        };
-      } catch (err) {
-        return toToolError(err);
-      }
+      const item = filter.addToWorkspace({
+        kind: args.kind,
+        content: args.content,
+        ...(args.workspaceId !== undefined ? { workspaceId: args.workspaceId } : {}),
+        ...(args.state ? { state: args.state } : {}),
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Added ${item.kind} #${item.id} to workspace ${item.workspaceId}.`,
+          },
+        ],
+        structuredContent: { item },
+      };
     })
   );
 }

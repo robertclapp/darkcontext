@@ -1,6 +1,5 @@
-import type Database from 'better-sqlite3';
-
 import type { DarkContextDb } from '../store/db.js';
+import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 
 import type {
   NewWorkspace,
@@ -37,9 +36,7 @@ export class Workspaces {
 
   create(input: NewWorkspace): Workspace {
     if (!input.name.trim()) throw new Error('workspace name is required');
-    const scopeId = input.scope
-      ? resolveScopeId(this.db.raw, input.scope)
-      : defaultScopeId(this.db.raw);
+    const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const now = Date.now();
     const info = this.db.raw
       .prepare('INSERT INTO workspaces (name, is_active, scope_id, created_at) VALUES (?, 0, ?, ?)')
@@ -94,6 +91,23 @@ export class Workspaces {
     return res.changes > 0;
   }
 
+  /**
+   * Resolve the target workspace for an `add_to_workspace`-style call:
+   * explicit id when given, otherwise the active workspace. Returns null
+   * if neither is available (kept out of addItem so callers can apply
+   * scope checks before writing).
+   */
+  resolveTarget(workspaceId: number | undefined): Workspace | null {
+    if (workspaceId !== undefined) {
+      try {
+        return this.getById(workspaceId);
+      } catch {
+        return null;
+      }
+    }
+    return this.getActive();
+  }
+
   addItem(workspaceId: number, item: NewWorkspaceItem): WorkspaceItem {
     const now = Date.now();
     const info = this.db.raw
@@ -141,19 +155,3 @@ function rowToItem(row: ItemRow): WorkspaceItem {
   };
 }
 
-function resolveScopeId(db: Database.Database, name: string): number {
-  const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(name) as
-    | { id: number }
-    | undefined;
-  if (row) return row.id;
-  const info = db.prepare('INSERT INTO scopes (name) VALUES (?)').run(name);
-  return Number(info.lastInsertRowid);
-}
-
-function defaultScopeId(db: Database.Database): number {
-  const row = db.prepare("SELECT id FROM scopes WHERE name = 'default'").get() as
-    | { id: number }
-    | undefined;
-  if (!row) throw new Error('default scope missing — did you run migrations?');
-  return row.id;
-}

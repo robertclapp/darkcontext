@@ -1,7 +1,6 @@
-import type Database from 'better-sqlite3';
-
 import type { DarkContextDb } from '../store/db.js';
-import { ensureVecTables, setEmbedDim } from '../store/db.js';
+import { VectorIndex } from '../store/vectorIndex.js';
+import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 
 import type {
@@ -45,10 +44,14 @@ const CONV_SELECT = `
 `;
 
 export class Conversations {
+  private readonly vectors: VectorIndex;
+
   constructor(
     private readonly db: DarkContextDb,
     private readonly embeddings: EmbeddingProvider
-  ) {}
+  ) {
+    this.vectors = new VectorIndex(db, embeddings, 'messages_vec');
+  }
 
   async ingest(
     source: string,
@@ -56,7 +59,7 @@ export class Conversations {
     opts: { scope?: string } = {}
   ): Promise<IngestResult> {
     if (!source.trim()) throw new Error('source label is required');
-    const scopeId = opts.scope ? resolveScopeId(this.db.raw, opts.scope) : defaultScopeId(this.db.raw);
+    const scopeId = resolveScopeOrDefault(this.db.raw, opts.scope);
 
     let inserted = 0;
     let skipped = 0;
@@ -99,7 +102,7 @@ export class Conversations {
     });
     tx();
 
-    await this.writeMessageVectors(insertedMessageIds, insertedMessageTexts);
+    await this.vectors.write(insertedMessageIds, insertedMessageTexts);
 
     return { inserted, skipped, messages: messagesTotal };
   }
@@ -140,13 +143,10 @@ export class Conversations {
 
   delete(id: number): boolean {
     const tx = this.db.raw.transaction((cid: number) => {
-      if (this.db.hasVec && this.db.embedDim > 0) {
-        const ids = this.db.raw
-          .prepare('SELECT id FROM messages WHERE conversation_id = ?')
-          .all(cid) as { id: number }[];
-        const del = this.db.raw.prepare('DELETE FROM messages_vec WHERE rowid = ?');
-        for (const r of ids) del.run(BigInt(r.id));
-      }
+      const ids = (this.db.raw
+        .prepare('SELECT id FROM messages WHERE conversation_id = ?')
+        .all(cid) as { id: number }[]).map((r) => r.id);
+      this.vectors.deleteMany(ids);
       const res = this.db.raw.prepare('DELETE FROM conversations WHERE id = ?').run(cid);
       return res.changes > 0;
     });
@@ -162,9 +162,23 @@ export class Conversations {
     return this.keywordSearch(query, limit, opts);
   }
 
+  /** Re-embed every message. Used by `dcx reindex`. Returns message count. */
+  async reindex(): Promise<number> {
+    this.vectors.truncate();
+    const rows = this.db.raw
+      .prepare('SELECT id, role, content FROM messages ORDER BY id')
+      .all() as Array<{ id: number; role: string; content: string }>;
+    if (rows.length === 0) return 0;
+    await this.vectors.write(
+      rows.map((r) => r.id),
+      rows.map((r) => `${r.role}: ${r.content}`)
+    );
+    return rows.length;
+  }
+
   private vectorSearch(qv: number[], limit: number, opts: HistorySearchOptions): HistoryHit[] {
     const filters: string[] = [];
-    const params: unknown[] = [Buffer.from(new Float32Array(qv).buffer), limit];
+    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
     if (opts.scope) {
       filters.push('AND s.name = ?');
       params.push(opts.scope);
@@ -215,38 +229,6 @@ export class Conversations {
     const rows = this.db.raw.prepare(sql).all(...params) as HitRow[];
     return rows.map((r) => rowToHit(r, 'keyword'));
   }
-
-  private async writeMessageVectors(ids: number[], texts: string[]): Promise<void> {
-    if (!this.db.hasVec || ids.length === 0) return;
-    let vecs: number[][];
-    try {
-      vecs = await this.embeddings.embed(texts);
-    } catch {
-      return;
-    }
-    if (vecs.length === 0) return;
-
-    const dim = vecs[0]!.length;
-    if (this.db.embedDim === 0) {
-      setEmbedDim(this.db.raw, dim);
-      (this.db as { embedDim: number }).embedDim = dim;
-      ensureVecTables(this.db.raw, dim);
-    } else if (dim !== this.db.embedDim) {
-      throw new Error(
-        `Embedding dim mismatch: provider returned ${dim}, store is ${this.db.embedDim}.`
-      );
-    }
-
-    const insert = this.db.raw.prepare(
-      'INSERT INTO messages_vec (rowid, embedding) VALUES (?, ?)'
-    );
-    const tx = this.db.raw.transaction(() => {
-      for (let i = 0; i < ids.length; i++) {
-        insert.run(BigInt(ids[i]!), Buffer.from(new Float32Array(vecs[i]!).buffer));
-      }
-    });
-    tx();
-  }
 }
 
 function rowToConv(r: ConvRow): Conversation {
@@ -283,21 +265,4 @@ function rowToHit(r: HitRow, match: 'vector' | 'keyword'): HistoryHit {
     score: match === 'vector' && r.distance !== undefined ? 1 / (1 + r.distance) : 0.5,
     match,
   };
-}
-
-function resolveScopeId(db: Database.Database, name: string): number {
-  const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(name) as
-    | { id: number }
-    | undefined;
-  if (row) return row.id;
-  const info = db.prepare('INSERT INTO scopes (name) VALUES (?)').run(name);
-  return Number(info.lastInsertRowid);
-}
-
-function defaultScopeId(db: Database.Database): number {
-  const row = db.prepare("SELECT id FROM scopes WHERE name = 'default'").get() as
-    | { id: number }
-    | undefined;
-  if (!row) throw new Error('default scope missing — did you run migrations?');
-  return row.id;
 }

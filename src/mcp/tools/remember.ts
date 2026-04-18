@@ -5,7 +5,6 @@ import type { ScopeFilter } from '../scopeFilter.js';
 import { withAudit } from '../audit.js';
 import type { AuditSink } from '../../core/audit/index.js';
 import type { ToolWithGrants } from '../../core/tools/index.js';
-import { toToolError } from './errors.js';
 
 const shape = {
   content: z.string().min(1).describe('The fact, preference, or note to remember.'),
@@ -13,9 +12,7 @@ const shape = {
   scope: z
     .string()
     .optional()
-    .describe(
-      "Scope name. Omitted = first scope the calling tool has write access to."
-    ),
+    .describe("Scope name. Omitted = first scope the calling tool has write access to."),
   tags: z.array(z.string()).optional().describe('Optional tags for later filtering.'),
   source: z.string().optional().describe('Optional source label (e.g. conversation id).'),
 };
@@ -35,31 +32,27 @@ export function registerRememberTool(
       inputSchema: shape,
     },
     withAudit(auditor, caller, 'remember', async (args) => {
-      try {
-        const memory = await filter.remember({
-          content: args.content,
-          ...(args.kind ? { kind: args.kind } : {}),
-          ...(args.scope ? { scope: args.scope } : {}),
-          ...(args.tags ? { tags: args.tags } : {}),
-          ...(args.source ? { source: args.source } : {}),
-        });
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Remembered #${memory.id} in scope '${memory.scope ?? '-'}'.`,
-            },
-          ],
-          structuredContent: {
-            id: memory.id,
-            scope: memory.scope,
-            kind: memory.kind,
-            tags: memory.tags,
+      const memory = await filter.remember({
+        content: args.content,
+        ...(args.kind ? { kind: args.kind } : {}),
+        ...(args.scope ? { scope: args.scope } : {}),
+        ...(args.tags ? { tags: args.tags } : {}),
+        ...(args.source ? { source: args.source } : {}),
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Remembered #${memory.id} in scope '${memory.scope ?? '-'}'.`,
           },
-        };
-      } catch (err) {
-        return toToolError(err);
-      }
+        ],
+        structuredContent: {
+          id: memory.id,
+          scope: memory.scope,
+          kind: memory.kind,
+          tags: memory.tags,
+        },
+      };
     })
   );
 }

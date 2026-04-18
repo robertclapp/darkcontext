@@ -112,6 +112,6 @@ describe('resolveImporter', () => {
     expect(resolveImporter('chatgpt').source).toBe('chatgpt');
     expect(resolveImporter('claude').source).toBe('claude');
     expect(resolveImporter('gemini').source).toBe('gemini');
-    expect(resolveImporter('json').source).toBe('generic');
+    expect(resolveImporter('generic').source).toBe('generic');
   });
 });

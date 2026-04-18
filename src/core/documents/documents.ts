@@ -1,7 +1,6 @@
-import type Database from 'better-sqlite3';
-
 import type { DarkContextDb } from '../store/db.js';
-import { ensureVecTables, setEmbedDim } from '../store/db.js';
+import { VectorIndex } from '../store/vectorIndex.js';
+import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 
 import { chunkText, type ChunkOptions } from './chunker.js';
@@ -36,16 +35,20 @@ const DOC_SELECT = `
 `;
 
 export class Documents {
+  private readonly vectors: VectorIndex;
+
   constructor(
     private readonly db: DarkContextDb,
     private readonly embeddings: EmbeddingProvider
-  ) {}
+  ) {
+    this.vectors = new VectorIndex(db, embeddings, 'document_chunks_vec');
+  }
 
   async ingest(input: IngestInput, chunkOpts: ChunkOptions = {}): Promise<IngestResult> {
     const chunks = chunkText(input.content, chunkOpts);
     if (chunks.length === 0) throw new Error('document is empty after chunking');
 
-    const scopeId = input.scope ? resolveScopeId(this.db.raw, input.scope) : defaultScopeId(this.db.raw);
+    const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const now = Date.now();
 
     const info = this.db.raw
@@ -68,12 +71,9 @@ export class Documents {
     });
     insertChunks();
 
-    await this.writeVectors(chunkIds, chunks);
+    await this.vectors.write(chunkIds, chunks);
 
-    return {
-      document: this.getById(documentId),
-      chunks: chunks.length,
-    };
+    return { document: this.getById(documentId), chunks: chunks.length };
   }
 
   getById(id: number): Document {
@@ -98,13 +98,10 @@ export class Documents {
 
   delete(id: number): boolean {
     const tx = this.db.raw.transaction((docId: number) => {
-      if (this.db.hasVec && this.db.embedDim > 0) {
-        const chunkIds = this.db.raw
-          .prepare('SELECT id FROM document_chunks WHERE document_id = ?')
-          .all(docId) as { id: number }[];
-        const del = this.db.raw.prepare('DELETE FROM document_chunks_vec WHERE rowid = ?');
-        for (const c of chunkIds) del.run(BigInt(c.id));
-      }
+      const chunkIds = (this.db.raw
+        .prepare('SELECT id FROM document_chunks WHERE document_id = ?')
+        .all(docId) as { id: number }[]).map((r) => r.id);
+      this.vectors.deleteMany(chunkIds);
       const res = this.db.raw.prepare('DELETE FROM documents WHERE id = ?').run(docId);
       return res.changes > 0;
     });
@@ -118,6 +115,20 @@ export class Documents {
       if (qv) return this.vectorSearch(qv, limit, opts.scope);
     }
     return this.keywordSearch(query, limit, opts.scope);
+  }
+
+  /** Re-embed all chunks; used by `dcx reindex`. Returns the chunk count written. */
+  async reindex(): Promise<number> {
+    this.vectors.truncate();
+    const rows = this.db.raw
+      .prepare('SELECT id, content FROM document_chunks ORDER BY id')
+      .all() as Array<{ id: number; content: string }>;
+    if (rows.length === 0) return 0;
+    await this.vectors.write(
+      rows.map((r) => r.id),
+      rows.map((r) => r.content)
+    );
+    return rows.length;
   }
 
   private vectorSearch(qv: number[], limit: number, scope?: string): DocumentChunkHit[] {
@@ -134,7 +145,7 @@ export class Documents {
         ${scope ? 'AND s.name = ?' : ''}
       ORDER BY v.distance
     `;
-    const params: unknown[] = [Buffer.from(new Float32Array(qv).buffer), limit];
+    const params: unknown[] = [VectorIndex.queryBlob(qv), limit];
     if (scope) params.push(scope);
     const rows = this.db.raw.prepare(sql).all(...params) as ChunkHitRow[];
     return rows.map((r) => ({
@@ -175,38 +186,6 @@ export class Documents {
       match: 'keyword' as const,
     }));
   }
-
-  private async writeVectors(chunkIds: number[], chunks: string[]): Promise<void> {
-    if (!this.db.hasVec || chunks.length === 0) return;
-    let vecs: number[][];
-    try {
-      vecs = await this.embeddings.embed(chunks);
-    } catch {
-      return;
-    }
-    if (vecs.length === 0) return;
-
-    const dim = vecs[0]!.length;
-    if (this.db.embedDim === 0) {
-      setEmbedDim(this.db.raw, dim);
-      (this.db as { embedDim: number }).embedDim = dim;
-      ensureVecTables(this.db.raw, dim);
-    } else if (dim !== this.db.embedDim) {
-      throw new Error(
-        `Embedding dim mismatch: provider returned ${dim}, store is ${this.db.embedDim}.`
-      );
-    }
-
-    const insert = this.db.raw.prepare(
-      'INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)'
-    );
-    const tx = this.db.raw.transaction(() => {
-      for (let i = 0; i < chunkIds.length; i++) {
-        insert.run(BigInt(chunkIds[i]!), Buffer.from(new Float32Array(vecs[i]!).buffer));
-      }
-    });
-    tx();
-  }
 }
 
 function rowToDoc(row: DocRow): Document {
@@ -218,21 +197,4 @@ function rowToDoc(row: DocRow): Document {
     scope: row.scope_name,
     ingestedAt: row.ingested_at,
   };
-}
-
-function resolveScopeId(db: Database.Database, name: string): number {
-  const row = db.prepare('SELECT id FROM scopes WHERE name = ?').get(name) as
-    | { id: number }
-    | undefined;
-  if (row) return row.id;
-  const info = db.prepare('INSERT INTO scopes (name) VALUES (?)').run(name);
-  return Number(info.lastInsertRowid);
-}
-
-function defaultScopeId(db: Database.Database): number {
-  const row = db.prepare("SELECT id FROM scopes WHERE name = 'default'").get() as
-    | { id: number }
-    | undefined;
-  if (!row) throw new Error('default scope missing — did you run migrations?');
-  return row.id;
 }

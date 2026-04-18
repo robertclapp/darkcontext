@@ -25,7 +25,6 @@ interface RecordedAudit {
 }
 
 async function connectPair(filter: ScopeFilter, recorded?: RecordedAudit[]): Promise<Client> {
-  const caller = (filter as unknown as { tool: ToolWithGrants }).tool;
   const auditor = {
     record: (entry: RecordedAudit) => {
       recorded?.push({
@@ -36,7 +35,7 @@ async function connectPair(filter: ScopeFilter, recorded?: RecordedAudit[]): Pro
       });
     },
   };
-  const server = buildServer(filter, auditor, caller);
+  const server = buildServer(filter, auditor);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0.0.1' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -131,8 +130,10 @@ describe('MCP integration', () => {
     expect(recorded[0]!.mcpTool).toBe('remember');
     expect(recorded[0]!.outcome).toBe('ok');
     expect(JSON.stringify(recorded[0]!.args)).not.toContain('private memory body');
+    // Outcome carries the classification; error holds the raw reason without
+    // the "permission denied" prefix (which lives in the tool-result text).
     expect(recorded[2]!.outcome).toBe('denied');
-    expect(recorded[2]!.error).toContain('permission denied');
+    expect(recorded[2]!.error).toMatch(/cannot write to scope 'work'/);
     await client.close();
   });
 
