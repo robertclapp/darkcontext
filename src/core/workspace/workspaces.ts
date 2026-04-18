@@ -1,6 +1,7 @@
 import type { DarkContextDb } from '../store/db.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { DEFAULT_WORKSPACE_ITEM_STATE } from '../constants.js';
 
 import type {
   NewWorkspace,
@@ -117,9 +118,9 @@ export class Workspaces {
         `INSERT INTO workspace_items (workspace_id, kind, content, state, updated_at)
          VALUES (?, ?, ?, ?, ?)`
       )
-      .run(workspaceId, item.kind, item.content, item.state ?? 'open', now);
+      .run(workspaceId, item.kind, item.content, item.state ?? DEFAULT_WORKSPACE_ITEM_STATE, now);
     const row = this.db.raw
-      .prepare('SELECT * FROM workspace_items WHERE id = ?')
+      .prepare('SELECT id, workspace_id, kind, content, state, updated_at FROM workspace_items WHERE id = ?')
       .get(Number(info.lastInsertRowid)) as ItemRow;
     return rowToItem(row);
   }
@@ -127,10 +128,10 @@ export class Workspaces {
   listItems(workspaceId: number, opts: { state?: string } = {}): WorkspaceItem[] {
     const rows = opts.state
       ? (this.db.raw
-          .prepare('SELECT * FROM workspace_items WHERE workspace_id = ? AND state = ? ORDER BY updated_at DESC')
+          .prepare('SELECT id, workspace_id, kind, content, state, updated_at FROM workspace_items WHERE workspace_id = ? AND state = ? ORDER BY updated_at DESC')
           .all(workspaceId, opts.state) as ItemRow[])
       : (this.db.raw
-          .prepare('SELECT * FROM workspace_items WHERE workspace_id = ? ORDER BY updated_at DESC')
+          .prepare('SELECT id, workspace_id, kind, content, state, updated_at FROM workspace_items WHERE workspace_id = ? ORDER BY updated_at DESC')
           .all(workspaceId) as ItemRow[]);
     return rows.map(rowToItem);
   }

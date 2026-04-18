@@ -14,6 +14,14 @@ export const SCHEMA_VERSION = 2;
  *  `memories.scope_id` FK would dangle. */
 export const DEFAULT_SCOPE_NAME = 'default';
 
+/** Default memory kind when caller doesn't specify one. Matches the SQL
+ *  DEFAULT on `memories.kind` in schema.sql. */
+export const DEFAULT_MEMORY_KIND = 'fact';
+
+/** Default workspace-item state when caller doesn't specify one. Matches
+ *  the SQL DEFAULT on `workspace_items.state` in schema.sql. */
+export const DEFAULT_WORKSPACE_ITEM_STATE = 'open';
+
 /** Deterministic stub embedding dimension. 128 is big enough to give the
  *  VectorIndex tests meaningful variance without bloating CI. Picked when
  *  first writing the stub; no downstream code depends on this specific

@@ -139,7 +139,10 @@ export class Conversations {
 
   messages(conversationId: number): Message[] {
     const rows = this.db.raw
-      .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY ts, id')
+      .prepare(
+        `SELECT id, conversation_id, role, content, ts
+         FROM messages WHERE conversation_id = ? ORDER BY ts, id`
+      )
       .all(conversationId) as MsgRow[];
     return rows.map(rowToMessage);
   }

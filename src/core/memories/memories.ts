@@ -5,7 +5,7 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
-import { DEFAULT_SCOPE_NAME } from '../constants.js';
+import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME } from '../constants.js';
 
 import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
 
@@ -40,7 +40,7 @@ export class Memories {
   async remember(input: NewMemory): Promise<Memory> {
     if (!input.content.trim()) throw new ValidationError('content', 'must not be empty');
     const now = Date.now();
-    const kind = input.kind ?? 'fact';
+    const kind = input.kind ?? DEFAULT_MEMORY_KIND;
     const tags = input.tags ?? [];
     const source = input.source ?? null;
     const scopeName = input.scope ?? DEFAULT_SCOPE_NAME;
