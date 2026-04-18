@@ -23,9 +23,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.3.0",
     "commander": "^12.1.0",
-    "sqlite-vec": "^0.1.6"
+    "sqlite-vec": "^0.1.6",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

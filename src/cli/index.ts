@@ -7,6 +7,9 @@ import { registerRecall } from './commands/recall.js';
 import { registerForget } from './commands/forget.js';
 import { registerList } from './commands/list.js';
 import { registerDoctor } from './commands/doctor.js';
+import { registerToolCommands } from './commands/tool.js';
+import { registerScopeCommands } from './commands/scope.js';
+import { registerServe } from './commands/serve.js';
 
 const program = new Command();
 program
@@ -20,6 +23,9 @@ registerRecall(program);
 registerForget(program);
 registerList(program);
 registerDoctor(program);
+registerToolCommands(program);
+registerScopeCommands(program);
+registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {
   console.error(err instanceof Error ? err.message : err);
