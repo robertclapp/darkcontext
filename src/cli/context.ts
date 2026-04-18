@@ -26,5 +26,3 @@ export async function withAppContext<T>(
   };
   return AppContext.run(init, fn);
 }
-
-export type { AppContext };
