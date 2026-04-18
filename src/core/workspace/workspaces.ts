@@ -1,5 +1,6 @@
 import type { DarkContextDb } from '../store/db.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
+import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 import type {
   NewWorkspace,
@@ -35,7 +36,8 @@ export class Workspaces {
   constructor(private readonly db: DarkContextDb) {}
 
   create(input: NewWorkspace): Workspace {
-    if (!input.name.trim()) throw new Error('workspace name is required');
+    if (!input.name.trim()) throw new ValidationError('name', 'workspace name is required');
+    if (this.getByName(input.name)) throw new ConflictError('workspace', input.name);
     const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const now = Date.now();
     const info = this.db.raw
@@ -57,7 +59,7 @@ export class Workspaces {
 
   getById(id: number): Workspace {
     const row = this.db.raw.prepare(`${WS_SELECT} WHERE w.id = ?`).get(id) as WsRow | undefined;
-    if (!row) throw new Error(`workspace ${id} not found`);
+    if (!row) throw new NotFoundError('workspace', id);
     return rowToWs(row);
   }
 
@@ -77,7 +79,7 @@ export class Workspaces {
 
   setActive(name: string): Workspace {
     const target = this.getByName(name);
-    if (!target) throw new Error(`workspace not found: ${name}`);
+    if (!target) throw new NotFoundError('workspace', name);
     const tx = this.db.raw.transaction(() => {
       this.db.raw.prepare('UPDATE workspaces SET is_active = 0').run();
       this.db.raw.prepare('UPDATE workspaces SET is_active = 1 WHERE id = ?').run(target.id);

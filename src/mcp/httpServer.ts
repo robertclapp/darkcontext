@@ -3,22 +3,14 @@ import { timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
-import { Memories } from '../core/memories/index.js';
-import { Documents } from '../core/documents/index.js';
-import { Workspaces } from '../core/workspace/index.js';
-import { Conversations } from '../core/conversations/index.js';
-import { Tools } from '../core/tools/index.js';
-import { AuditLog } from '../core/audit/index.js';
-import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
-import { openDb } from '../core/store/db.js';
+import { AppContext, type ContextInit } from '../core/context.js';
+import { AuthError } from '../core/errors.js';
 import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
 import { ScopeFilter } from './scopeFilter.js';
 
-export interface HttpServeOptions {
-  dbPath?: string;
-  provider?: string;
+export interface HttpServeOptions extends ContextInit {
   port?: number;
   host?: string;
   /** Bearer token expected on every request; defaults to DARKCONTEXT_TOKEN env. */
@@ -34,75 +26,82 @@ export interface StartedHttpServer {
 /**
  * Start the DarkContext MCP server over Streamable HTTP.
  *
- * Auth model (M3): one process = one tool identity. The process is configured
- * with a single bearer token (via --token or DARKCONTEXT_TOKEN) and rejects
- * requests whose `Authorization: Bearer ...` header does not match in
- * constant time. Multi-tool HTTP with per-request identity is deferred to M5.
+ * Auth model (M3): one process = one tool identity. The process is
+ * configured with a single bearer token (via --token / DARKCONTEXT_TOKEN)
+ * and rejects requests whose `Authorization: Bearer ...` header does not
+ * match in constant time. Multi-tool HTTP with per-request identity is
+ * deferred to a future milestone.
+ *
+ * Any error thrown during setup (missing token, unregistered token,
+ * listen failure) closes the context before propagating — no DB leak.
  */
 export async function startHttpServer(opts: HttpServeOptions = {}): Promise<StartedHttpServer> {
-  const token = opts.token ?? process.env.DARKCONTEXT_TOKEN;
-  if (!token) {
-    throw new Error('HTTP transport requires --token or DARKCONTEXT_TOKEN to be set.');
-  }
-
-  const db = openDb(opts.dbPath ? { path: opts.dbPath } : {});
-  const embeddings = createEmbeddingProvider(resolveProviderKind(opts.provider));
-  const memories = new Memories(db, embeddings);
-  const documents = new Documents(db, embeddings);
-  const workspaces = new Workspaces(db);
-  const conversations = new Conversations(db, embeddings);
-  const toolsStore = new Tools(db);
-
-  const callerTool = toolsStore.authenticate(token);
-  if (!callerTool) {
-    db.close();
-    throw new Error('Provided token does not match any registered tool.');
-  }
-
-  const filter = new ScopeFilter(callerTool, { memories, documents, workspaces, conversations });
-  const auditor = new AuditLog(db, callerTool);
-  const mcpServer = buildServer(filter, auditor);
-  // Stateless mode: the SDK signals this by the generator being absent.
-  // The type demands a function under exactOptionalPropertyTypes; the runtime
-  // accepts `undefined` — cast deliberately.
-  const transport = new StreamableHTTPServerTransport(
-    { sessionIdGenerator: undefined } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0]
-  );
-  await mcpServer.connect(transport as unknown as Transport);
-
-  const expectedHash = hashToken(token);
-
-  const httpServer = createServer(async (req, res) => {
-    if (!checkBearer(req, expectedHash)) return unauthorized(res);
-    try {
-      await transport.handleRequest(req, res);
-    } catch (err) {
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ error: (err as Error).message }));
-      }
+  const ctx = AppContext.open(opts);
+  try {
+    const token = opts.token ?? ctx.config.token;
+    if (!token) {
+      throw new AuthError('HTTP transport requires --token or DARKCONTEXT_TOKEN to be set.');
     }
-  });
 
-  const port = opts.port ?? 4000;
-  const host = opts.host ?? '127.0.0.1';
+    const callerTool = ctx.tools.authenticate(token);
+    if (!callerTool) {
+      throw new AuthError('Provided token does not match any registered tool.');
+    }
 
-  await new Promise<void>((resolvePromise) => httpServer.listen(port, host, resolvePromise));
-  const address = httpServer.address();
-  const actualPort = typeof address === 'object' && address ? address.port : port;
+    const filter = new ScopeFilter(callerTool, {
+      memories: ctx.memories,
+      documents: ctx.documents,
+      workspaces: ctx.workspaces,
+      conversations: ctx.conversations,
+    });
+    const auditor = ctx.newAuditLog(callerTool);
+    const mcpServer = buildServer(filter, auditor);
 
-  return {
-    httpServer,
-    port: actualPort,
-    close: async () => {
-      await new Promise<void>((resolvePromise, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolvePromise()))
-      );
-      await mcpServer.close();
-      db.close();
-    },
-  };
+    const transport = new StreamableHTTPServerTransport(
+      // Stateless mode: the SDK signals this by omitting a generator function.
+      // The type demands a function under exactOptionalPropertyTypes; the
+      // runtime accepts `undefined` — cast deliberately.
+      { sessionIdGenerator: undefined } as unknown as ConstructorParameters<
+        typeof StreamableHTTPServerTransport
+      >[0]
+    );
+    await mcpServer.connect(transport as unknown as Transport);
+
+    const expectedHash = hashToken(token);
+    const httpServer = createServer(async (req, res) => {
+      if (!checkBearer(req, expectedHash)) return unauthorized(res);
+      try {
+        await transport.handleRequest(req, res);
+      } catch (err) {
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ error: (err as Error).message }));
+        }
+      }
+    });
+
+    const port = opts.port ?? 4000;
+    const host = opts.host ?? '127.0.0.1';
+    await new Promise<void>((done) => httpServer.listen(port, host, done));
+    const address = httpServer.address();
+    const actualPort = typeof address === 'object' && address ? address.port : port;
+
+    return {
+      httpServer,
+      port: actualPort,
+      close: async () => {
+        await new Promise<void>((done, reject) =>
+          httpServer.close((err) => (err ? reject(err) : done()))
+        );
+        await mcpServer.close();
+        ctx.close();
+      },
+    };
+  } catch (err) {
+    ctx.close();
+    throw err;
+  }
 }
 
 function checkBearer(req: IncomingMessage, expectedHash: string): boolean {
@@ -110,8 +109,7 @@ function checkBearer(req: IncomingMessage, expectedHash: string): boolean {
   if (!header || !header.startsWith('Bearer ')) return false;
   const presented = header.slice('Bearer '.length).trim();
   if (!presented) return false;
-  const presentedHash = hashToken(presented);
-  const a = Buffer.from(presentedHash, 'hex');
+  const a = Buffer.from(hashToken(presented), 'hex');
   const b = Buffer.from(expectedHash, 'hex');
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);

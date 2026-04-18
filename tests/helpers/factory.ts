@@ -2,45 +2,49 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { openDb, type DarkContextDb } from '../../src/core/store/db.js';
-import { Memories } from '../../src/core/memories/index.js';
-import { Documents } from '../../src/core/documents/index.js';
-import { Workspaces } from '../../src/core/workspace/index.js';
-import { Conversations } from '../../src/core/conversations/index.js';
-import { Tools } from '../../src/core/tools/index.js';
-import { StubEmbeddingProvider } from '../../src/core/embeddings/stub.js';
+import { AppContext } from '../../src/core/context.js';
 
+/**
+ * Test fixture: a temp-dir `AppContext` using the deterministic stub
+ * embedding provider. The helper exposes the ctx plus shortcut fields
+ * for every domain so tests read `fx.memories.recall(...)` rather than
+ * `fx.ctx.memories.recall(...)`. The ctx itself is available as `fx.ctx`
+ * for tests that need context-level APIs (config, newAuditLog, etc.).
+ *
+ * Adding a new domain: add it to AppContext; expose a shortcut here if
+ * many tests will touch it.
+ */
 export interface Fixture {
-  dir: string;
-  db: DarkContextDb;
-  memories: Memories;
-  documents: Documents;
-  workspaces: Workspaces;
-  conversations: Conversations;
-  tools: Tools;
-  cleanup: () => void;
+  readonly ctx: AppContext;
+  readonly dir: string;
+  readonly cleanup: () => void;
+
+  // shortcut accessors
+  readonly db: AppContext['db'];
+  readonly memories: AppContext['memories'];
+  readonly documents: AppContext['documents'];
+  readonly workspaces: AppContext['workspaces'];
+  readonly conversations: AppContext['conversations'];
+  readonly scopes: AppContext['scopes'];
+  readonly tools: AppContext['tools'];
 }
 
 export function makeFixture(): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'dcx-test-'));
-  const db = openDb({ path: join(dir, 'store.db') });
-  const embeddings = new StubEmbeddingProvider(64);
-  const memories = new Memories(db, embeddings);
-  const documents = new Documents(db, embeddings);
-  const workspaces = new Workspaces(db);
-  const conversations = new Conversations(db, embeddings);
-  const tools = new Tools(db);
+  const ctx = AppContext.open({ dbPath: join(dir, 'store.db'), embeddings: 'stub' });
   return {
+    ctx,
     dir,
-    db,
-    memories,
-    documents,
-    workspaces,
-    conversations,
-    tools,
     cleanup: () => {
-      db.close();
+      ctx.close();
       rmSync(dir, { recursive: true, force: true });
     },
+    get db() { return ctx.db; },
+    get memories() { return ctx.memories; },
+    get documents() { return ctx.documents; },
+    get workspaces() { return ctx.workspaces; },
+    get conversations() { return ctx.conversations; },
+    get scopes() { return ctx.scopes; },
+    get tools() { return ctx.tools; },
   };
 }

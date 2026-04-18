@@ -1,3 +1,5 @@
+import type { Config } from '../config.js';
+
 import { OllamaEmbeddingProvider } from './ollama.js';
 import { OnnxEmbeddingProvider } from './onnx.js';
 import type { EmbeddingProvider } from './provider.js';
@@ -5,18 +7,23 @@ import { StubEmbeddingProvider } from './stub.js';
 
 export type ProviderKind = 'stub' | 'ollama' | 'onnx';
 
-export function resolveProviderKind(raw?: string): ProviderKind {
-  const v = (raw ?? process.env.DARKCONTEXT_EMBEDDINGS ?? 'stub').toLowerCase();
-  if (v === 'ollama' || v === 'onnx' || v === 'stub') return v;
-  throw new Error(`Unknown embeddings provider: ${v}`);
+export interface FactoryOptions {
+  kind?: ProviderKind;
+  /** Resolved config values. When omitted, only `stub` is safe to construct. */
+  config?: Pick<Config, 'embeddings' | 'ollama' | 'onnx'>;
 }
 
-export function createEmbeddingProvider(kind?: ProviderKind): EmbeddingProvider {
-  const k = kind ?? resolveProviderKind();
-  switch (k) {
-    case 'ollama': return new OllamaEmbeddingProvider();
-    case 'onnx':   return new OnnxEmbeddingProvider();
+export function createEmbeddingProvider(opts: FactoryOptions = {}): EmbeddingProvider {
+  const kind = opts.kind ?? opts.config?.embeddings ?? 'stub';
+  switch (kind) {
     case 'stub':   return new StubEmbeddingProvider();
+    case 'ollama': return new OllamaEmbeddingProvider({
+      url: opts.config?.ollama.url ?? 'http://localhost:11434',
+      model: opts.config?.ollama.model ?? 'nomic-embed-text',
+    });
+    case 'onnx':   return new OnnxEmbeddingProvider({
+      model: opts.config?.onnx.model ?? 'Xenova/all-MiniLM-L6-v2',
+    });
   }
 }
 

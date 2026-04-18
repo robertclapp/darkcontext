@@ -17,33 +17,29 @@ import type {
   HistorySearchOptions,
 } from '../core/conversations/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
+import { ScopeDeniedError } from '../core/errors.js';
 
 /**
- * Security boundary. Every MCP tool call flows through this filter — it is the
- * ONLY layer that decides whether a given calling tool may read or write a
- * given scope. The underlying `Memories` API is deliberately unscoped so the
- * admin CLI can operate without auth; MCP must never bypass this filter.
+ * Security boundary between MCP callers and the domain modules.
  *
- * Rules:
- *   - A tool may remember into a scope iff it has canWrite on that scope.
- *   - A tool may forget a memory iff it has canWrite on that memory's scope.
- *   - A tool may recall across scopes iff it has canRead on them; results are
- *     filtered server-side, never leaked by count, id, or error.
- *   - If no readable scopes, recall returns an empty array (not an error).
- *   - If caller omits a scope on remember, we default to the tool's first
- *     writable scope; if none, we reject.
+ * Every MCP tool call passes through a method here. Each method applies
+ * one of two policies:
+ *
+ *   READ:  results are filtered to scopes the calling tool can read.
+ *          An explicit unreadable scope throws ScopeDeniedError.
+ *          Zero readable scopes → empty result (never an error).
+ *   WRITE: the target scope must be writable. Unscoped writes default
+ *          to the tool's first writable scope; no writable scopes at
+ *          all → ScopeDeniedError.
+ *
+ * `forget` is intentionally silent across scope boundaries (returns
+ * `false` instead of throwing) so tools can't enumerate ids in scopes
+ * they aren't granted.
+ *
+ * The raw domain APIs are deliberately unscoped — the admin CLI uses
+ * them directly. The MCP layer must never bypass this filter.
  */
-
-export class ScopeDeniedError extends Error {
-  constructor(
-    message: string,
-    public readonly kind: 'read' | 'write',
-    public readonly scope: string
-  ) {
-    super(message);
-    this.name = 'ScopeDeniedError';
-  }
-}
+export { ScopeDeniedError };
 
 export interface FilterDeps {
   memories: Memories;
@@ -58,21 +54,15 @@ export class ScopeFilter {
   private readonly workspaces: Workspaces;
   private readonly conversations: Conversations;
 
-  constructor(
-    private readonly tool: ToolWithGrants,
-    deps: FilterDeps
-  ) {
+  constructor(private readonly tool: ToolWithGrants, deps: FilterDeps) {
     this.memories = deps.memories;
     this.documents = deps.documents;
     this.workspaces = deps.workspaces;
     this.conversations = deps.conversations;
   }
 
-  /**
-   * Return the tool identity this filter was constructed with. Exposed so
-   * callers (server bootstrap, tests) don't need to thread the tool through
-   * a second parameter and can avoid reaching into private state.
-   */
+  // ---------- caller identity ----------
+
   get caller(): ToolWithGrants {
     return this.tool;
   }
@@ -81,116 +71,60 @@ export class ScopeFilter {
     return this.tool.name;
   }
 
-  readableScopes(): string[] {
+  // ---------- grant queries ----------
+
+  readableScopes(): readonly string[] {
     return this.tool.grants.filter((g) => g.canRead).map((g) => g.scope);
   }
 
-  writableScopes(): string[] {
+  writableScopes(): readonly string[] {
     return this.tool.grants.filter((g) => g.canWrite).map((g) => g.scope);
   }
 
-  canRead(scope: string): boolean {
+  hasReadAccess(scope: string): boolean {
     return this.findGrant(scope)?.canRead ?? false;
   }
 
-  canWrite(scope: string): boolean {
+  hasWriteAccess(scope: string): boolean {
     return this.findGrant(scope)?.canWrite ?? false;
   }
 
+  // ---------- memories ----------
+
   async remember(input: NewMemory): Promise<Memory> {
-    const scope = input.scope ?? this.defaultWritableScope();
-    if (!scope) {
-      throw new ScopeDeniedError(
-        `tool '${this.tool.name}' has no writable scopes`,
-        'write',
-        '(none)'
-      );
-    }
-    if (!this.canWrite(scope)) {
-      throw new ScopeDeniedError(
-        `tool '${this.tool.name}' cannot write to scope '${scope}'`,
-        'write',
-        scope
-      );
-    }
+    const scope = this.requireWritableScope(input.scope);
     return this.memories.remember({ ...input, scope });
   }
 
-  async recall(
-    query: string,
-    opts: { limit?: number; scope?: string } = {}
-  ): Promise<RecallHit[]> {
-    const readable = new Set(this.readableScopes());
-    if (readable.size === 0) return [];
-
+  async recall(query: string, opts: { limit?: number; scope?: string } = {}): Promise<RecallHit[]> {
     if (opts.scope !== undefined) {
-      if (!readable.has(opts.scope)) {
-        throw new ScopeDeniedError(
-          `tool '${this.tool.name}' cannot read scope '${opts.scope}'`,
-          'read',
-          opts.scope
-        );
-      }
+      this.requireReadableScope(opts.scope);
       return this.memories.recall(query, {
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
         scope: opts.scope,
       });
     }
-
-    // No scope specified: query unscoped, then filter to readable scopes.
-    // Over-fetch to compensate for filtering so we still return `limit` hits
-    // in the common case.
-    const limit = opts.limit ?? 10;
-    const rawHits = await this.memories.recall(query, { limit: limit * 4 });
-    const filtered = rawHits.filter((h) => h.memory.scope !== null && readable.has(h.memory.scope));
-    return filtered.slice(0, limit);
+    return this.filterReadableHits(
+      await this.memories.recall(query, { limit: (opts.limit ?? 10) * 4 }),
+      (h) => h.memory.scope,
+      opts.limit ?? 10
+    );
   }
 
   forget(id: number): boolean {
-    const memory = this.safeGet(id);
-    if (!memory) return false;
-
-    if (memory.scope === null || !this.canWrite(memory.scope)) {
-      // Do not leak existence — report "not found" rather than a permission error.
+    const memory = this.safeGetMemory(id);
+    if (!memory || memory.scope === null || !this.hasWriteAccess(memory.scope)) {
+      // Intentionally collapse all "cannot delete" cases to the same
+      // signal — do not distinguish "not found" from "not yours".
       return false;
     }
     return this.memories.forget(id);
   }
 
-  private findGrant(scope: string): ToolGrant | undefined {
-    return this.tool.grants.find((g) => g.scope === scope);
-  }
-
-  private defaultWritableScope(): string | undefined {
-    return this.writableScopes()[0];
-  }
-
-  private safeGet(id: number): Memory | null {
-    try {
-      return this.memories.getById(id);
-    } catch {
-      return null;
-    }
-  }
-
-  // ---------- Documents ----------
+  // ---------- documents ----------
 
   async ingestDocument(input: IngestInput): Promise<IngestResult> {
-    const scope = input.scope ?? this.defaultWritableScope();
-    if (!scope) {
-      throw new ScopeDeniedError(
-        `tool '${this.tool.name}' has no writable scopes`,
-        'write',
-        '(none)'
-      );
-    }
-    if (!this.canWrite(scope)) {
-      throw new ScopeDeniedError(
-        `tool '${this.tool.name}' cannot write to scope '${scope}'`,
-        'write',
-        scope
-      );
-    }
+    const scope = this.requireWritableScope(input.scope);
     return this.documents.ingest({ ...input, scope });
   }
 
@@ -198,77 +132,53 @@ export class ScopeFilter {
     query: string,
     opts: { limit?: number; scope?: string } = {}
   ): Promise<DocumentChunkHit[]> {
-    const readable = new Set(this.readableScopes());
-    if (readable.size === 0) return [];
-
     if (opts.scope !== undefined) {
-      if (!readable.has(opts.scope)) {
-        throw new ScopeDeniedError(
-          `tool '${this.tool.name}' cannot read scope '${opts.scope}'`,
-          'read',
-          opts.scope
-        );
-      }
+      this.requireReadableScope(opts.scope);
       return this.documents.search(query, {
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
         scope: opts.scope,
       });
     }
-
-    const limit = opts.limit ?? 10;
-    const raw = await this.documents.search(query, { limit: limit * 4 });
-    return raw.filter((h) => h.scope !== null && readable.has(h.scope)).slice(0, limit);
+    return this.filterReadableHits(
+      await this.documents.search(query, { limit: (opts.limit ?? 10) * 4 }),
+      (h) => h.scope,
+      opts.limit ?? 10
+    );
   }
 
-  // ---------- Workspaces ----------
+  // ---------- conversation history ----------
+
+  async searchHistory(query: string, opts: HistorySearchOptions = {}): Promise<HistoryHit[]> {
+    if (opts.scope !== undefined) {
+      this.requireReadableScope(opts.scope);
+      return this.conversations.search(query, opts);
+    }
+    return this.filterReadableHits(
+      await this.conversations.search(query, { ...opts, limit: (opts.limit ?? 10) * 4 }),
+      (h) => h.scope,
+      opts.limit ?? 10
+    );
+  }
+
+  // ---------- workspaces ----------
 
   listWorkspaces(): Workspace[] {
     const readable = new Set(this.readableScopes());
     if (readable.size === 0) return [];
-    return this.workspaces
-      .list()
-      .filter((w) => w.scope !== null && readable.has(w.scope));
+    return this.workspaces.list().filter((w) => w.scope !== null && readable.has(w.scope));
   }
 
   getActiveWorkspace(): Workspace | null {
     const readable = new Set(this.readableScopes());
     const active = this.workspaces.getActive();
-    if (!active) return null;
-    if (active.scope === null || !readable.has(active.scope)) return null;
+    if (!active || active.scope === null || !readable.has(active.scope)) return null;
     return active;
   }
 
-  // ---------- Conversation history ----------
-
-  async searchHistory(
-    query: string,
-    opts: HistorySearchOptions = {}
-  ): Promise<HistoryHit[]> {
-    const readable = new Set(this.readableScopes());
-    if (readable.size === 0) return [];
-
-    if (opts.scope !== undefined) {
-      if (!readable.has(opts.scope)) {
-        throw new ScopeDeniedError(
-          `tool '${this.tool.name}' cannot read scope '${opts.scope}'`,
-          'read',
-          opts.scope
-        );
-      }
-      return this.conversations.search(query, opts);
-    }
-
-    const limit = opts.limit ?? 10;
-    const raw = await this.conversations.search(query, { ...opts, limit: limit * 4 });
-    return raw.filter((h) => h.scope !== null && readable.has(h.scope)).slice(0, limit);
-  }
-
   addToWorkspace(item: NewWorkspaceItem & { workspaceId?: number }): WorkspaceItem {
-    // Target resolution (explicit id vs. active) is a workspace concern;
-    // the filter only decides whether the calling tool may write to it.
     const target = this.workspaces.resolveTarget(item.workspaceId);
-    if (!target) throw new Error('no workspace specified and no active workspace set');
-    if (target.scope === null || !this.canWrite(target.scope)) {
+    if (!target) throw new ScopeDeniedError('no workspace specified and no active workspace set', 'write', '(none)');
+    if (target.scope === null || !this.hasWriteAccess(target.scope)) {
       throw new ScopeDeniedError(
         `tool '${this.tool.name}' cannot write workspace '${target.name}' (scope '${target.scope ?? '-'}')`,
         'write',
@@ -280,5 +190,64 @@ export class ScopeFilter {
       content: item.content,
       ...(item.state ? { state: item.state } : {}),
     });
+  }
+
+  // ---------- internals ----------
+
+  private findGrant(scope: string): ToolGrant | undefined {
+    return this.tool.grants.find((g) => g.scope === scope);
+  }
+
+  private requireWritableScope(requested: string | undefined): string {
+    const scope = requested ?? this.writableScopes()[0];
+    if (!scope) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' has no writable scopes`,
+        'write',
+        '(none)'
+      );
+    }
+    if (!this.hasWriteAccess(scope)) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' cannot write to scope '${scope}'`,
+        'write',
+        scope
+      );
+    }
+    return scope;
+  }
+
+  private requireReadableScope(scope: string): void {
+    if (!this.hasReadAccess(scope)) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' cannot read scope '${scope}'`,
+        'read',
+        scope
+      );
+    }
+  }
+
+  private filterReadableHits<T>(
+    hits: T[],
+    getScope: (h: T) => string | null,
+    limit: number
+  ): T[] {
+    const readable = new Set(this.readableScopes());
+    if (readable.size === 0) return [];
+    const filtered: T[] = [];
+    for (const h of hits) {
+      const s = getScope(h);
+      if (s !== null && readable.has(s)) filtered.push(h);
+      if (filtered.length >= limit) break;
+    }
+    return filtered;
+  }
+
+  private safeGetMemory(id: number): Memory | null {
+    try {
+      return this.memories.getById(id);
+    } catch {
+      return null;
+    }
   }
 }

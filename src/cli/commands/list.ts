@@ -1,6 +1,29 @@
 import type { Command } from 'commander';
 
-import { buildContext } from '../context.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
+
+export interface ListOptions extends CommonCliOptions {
+  limit: number;
+  scope?: string;
+}
+
+export async function runList(
+  opts: ListOptions,
+  out: (line: string) => void = console.log
+): Promise<void> {
+  await withAppContext(opts, (ctx) => {
+    const memories = ctx.memories.list({
+      limit: opts.limit,
+      ...(opts.scope ? { scope: opts.scope } : {}),
+    });
+    if (memories.length === 0) {
+      out('(no memories)');
+      return;
+    }
+    for (const m of memories) out(`#${m.id} [${m.scope ?? '-'}] ${m.content}`);
+  });
+}
 
 export function registerList(program: Command): void {
   program
@@ -10,22 +33,7 @@ export function registerList(program: Command): void {
     .option('--scope <scope>', 'restrict to a scope')
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
-    .action((opts: { limit: number; scope?: string; db?: string; provider?: string }) => {
-      const ctx = buildContext(opts);
-      try {
-        const memories = ctx.memories.list({
-          limit: opts.limit,
-          ...(opts.scope ? { scope: opts.scope } : {}),
-        });
-        if (memories.length === 0) {
-          console.log('(no memories)');
-          return;
-        }
-        for (const m of memories) {
-          console.log(`#${m.id} [${m.scope ?? '-'}] ${m.content}`);
-        }
-      } finally {
-        ctx.close();
-      }
+    .action(async (opts: ListOptions) => {
+      await runList(opts);
     });
 }

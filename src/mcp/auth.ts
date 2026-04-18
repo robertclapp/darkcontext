@@ -1,11 +1,7 @@
 import type { Tools, ToolWithGrants } from '../core/tools/index.js';
+import { AuthError } from '../core/errors.js';
 
-export class AuthError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AuthError';
-  }
-}
+export { AuthError };
 
 /**
  * Resolve the calling tool identity from `DARKCONTEXT_TOKEN`. For the stdio

@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 
 import { chunkText, type ChunkOptions } from './chunker.js';
 import type {
@@ -45,8 +46,9 @@ export class Documents {
   }
 
   async ingest(input: IngestInput, chunkOpts: ChunkOptions = {}): Promise<IngestResult> {
+    if (!input.title.trim()) throw new ValidationError('title', 'must not be empty');
     const chunks = chunkText(input.content, chunkOpts);
-    if (chunks.length === 0) throw new Error('document is empty after chunking');
+    if (chunks.length === 0) throw new ValidationError('content', 'document is empty after chunking');
 
     const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const now = Date.now();
@@ -80,7 +82,7 @@ export class Documents {
     const row = this.db.raw
       .prepare(`${DOC_SELECT} WHERE d.id = ?`)
       .get(id) as DocRow | undefined;
-    if (!row) throw new Error(`document ${id} not found`);
+    if (!row) throw new NotFoundError('document', id);
     return rowToDoc(row);
   }
 

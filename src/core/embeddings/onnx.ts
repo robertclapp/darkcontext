@@ -1,7 +1,7 @@
 import { EmbeddingError, type EmbeddingProvider } from './provider.js';
 
 export interface OnnxOptions {
-  model?: string;
+  model: string;
 }
 
 /**
@@ -15,8 +15,8 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   private readonly modelId: string;
   private pipelinePromise: Promise<unknown> | null = null;
 
-  constructor(opts: OnnxOptions = {}) {
-    this.modelId = opts.model ?? process.env.DARKCONTEXT_ONNX_MODEL ?? 'Xenova/all-MiniLM-L6-v2';
+  constructor(opts: OnnxOptions) {
+    this.modelId = opts.model;
   }
 
   get dimension(): number {
@@ -44,7 +44,6 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     this.pipelinePromise = (async () => {
       let mod: { pipeline: (task: string, model: string) => Promise<unknown> };
       try {
-        // @xenova/transformers is an optional peer; load it only if installed.
         mod = (await import(
           /* @vite-ignore */ '@xenova/transformers' as string
         )) as typeof mod;

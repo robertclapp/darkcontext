@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 
 import type {
   Conversation,
@@ -58,7 +59,7 @@ export class Conversations {
     items: ImportedConversation[],
     opts: { scope?: string } = {}
   ): Promise<IngestResult> {
-    if (!source.trim()) throw new Error('source label is required');
+    if (!source.trim()) throw new ValidationError('source', 'required');
     const scopeId = resolveScopeOrDefault(this.db.raw, opts.scope);
 
     let inserted = 0;
@@ -130,7 +131,7 @@ export class Conversations {
     const row = this.db.raw
       .prepare(`${CONV_SELECT} WHERE c.id = ?`)
       .get(id) as ConvRow | undefined;
-    if (!row) throw new Error(`conversation ${id} not found`);
+    if (!row) throw new NotFoundError('conversation', id);
     return rowToConv(row);
   }
 

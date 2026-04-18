@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { openDb } from '../../core/store/db.js';
-import { defaultDbPath } from '../../core/store/paths.js';
+import { loadConfig } from '../../core/config.js';
 
 export function registerBackup(program: Command): void {
   program
@@ -31,7 +31,7 @@ export function registerBackup(program: Command): void {
     .action((src: string, opts: { db?: string; yes: boolean }) => {
       const srcPath = resolve(src);
       if (!existsSync(srcPath)) throw new Error(`no such backup file: ${srcPath}`);
-      const destPath = opts.db ?? defaultDbPath();
+      const destPath = opts.db ?? loadConfig().dbPath;
 
       if (!opts.yes) {
         throw new Error(
@@ -41,8 +41,6 @@ export function registerBackup(program: Command): void {
 
       mkdirSync(dirname(destPath), { recursive: true });
       copyFileSync(srcPath, destPath);
-      // Also copy the WAL + SHM siblings if present, so we restore a
-      // consistent snapshot. Absence is normal (backup API merges WAL in).
       for (const suffix of ['-wal', '-shm']) {
         const from = `${srcPath}${suffix}`;
         const to = `${destPath}${suffix}`;

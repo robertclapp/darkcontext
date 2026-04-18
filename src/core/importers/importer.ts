@@ -1,4 +1,5 @@
 import type { ImportedConversation } from '../conversations/types.js';
+import { ImporterParseError } from '../errors.js';
 
 export interface Importer {
   /** Stable source label stored on each conversation row. */
@@ -12,12 +13,7 @@ export interface Importer {
   parse(raw: string): ImportedConversation[];
 }
 
-export class ImporterParseError extends Error {
-  constructor(message: string, public readonly source: string) {
-    super(`[${source}] ${message}`);
-    this.name = 'ImporterParseError';
-  }
-}
+export { ImporterParseError };
 
 export function toEpochMs(value: unknown): number {
   if (typeof value === 'number') {

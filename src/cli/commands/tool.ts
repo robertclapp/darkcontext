@@ -1,8 +1,7 @@
 import type { Command } from 'commander';
 
-import { openDb } from '../../core/store/db.js';
-import { Tools } from '../../core/tools/index.js';
-import { defaultDbPath } from '../../core/store/paths.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
 
 export function registerToolCommands(program: Command): void {
   const tool = program.command('tool').description('Manage MCP tool identities');
@@ -14,18 +13,18 @@ export function registerToolCommands(program: Command): void {
     .option('--read-only', 'tool can read but not write the granted scopes', false)
     .option('--db <path>', 'override database path')
     .action(
-      (
+      async (
         name: string,
-        opts: { scopes: string; readOnly: boolean; db?: string }
+        opts: CommonCliOptions & { scopes: string; readOnly: boolean }
       ) => {
-        const db = openDb(opts.db ? { path: opts.db } : {});
-        try {
-          const tools = new Tools(db);
-          const scopes = parseList(opts.scopes);
-          const result = tools.create({ name, scopes, readOnly: opts.readOnly });
-
+        await withAppContext(opts, (ctx) => {
+          const result = ctx.tools.create({
+            name,
+            scopes: parseList(opts.scopes),
+            readOnly: opts.readOnly,
+          });
           console.log(`Provisioned tool '${result.tool.name}' (#${result.tool.id})`);
-          console.log(`Scopes:`);
+          console.log('Scopes:');
           for (const g of result.grants) {
             const perms = [g.canRead ? 'read' : null, g.canWrite ? 'write' : null].filter(Boolean);
             console.log(`  - ${g.scope} (${perms.join(', ')})`);
@@ -50,9 +49,7 @@ export function registerToolCommands(program: Command): void {
               2
             )
           );
-        } finally {
-          db.close();
-        }
+        });
       }
     );
 
@@ -60,15 +57,10 @@ export function registerToolCommands(program: Command): void {
     .command('list')
     .description('List provisioned tools and their scopes')
     .option('--db <path>', 'override database path')
-    .action((opts: { db?: string }) => {
-      const db = openDb(opts.db ? { path: opts.db } : {});
-      try {
-        const tools = new Tools(db);
-        const all = tools.list();
-        if (all.length === 0) {
-          console.log('(no tools)');
-          return;
-        }
+    .action(async (opts: CommonCliOptions) => {
+      await withAppContext(opts, (ctx) => {
+        const all = ctx.tools.list();
+        if (all.length === 0) return console.log('(no tools)');
         for (const t of all) {
           const grants = t.grants
             .map((g) => `${g.scope}:${g.canRead ? 'r' : '-'}${g.canWrite ? 'w' : '-'}`)
@@ -76,39 +68,30 @@ export function registerToolCommands(program: Command): void {
           const seen = t.lastSeenAt ? new Date(t.lastSeenAt).toISOString() : 'never';
           console.log(`${t.name.padEnd(20)} [${grants}]  last_seen=${seen}`);
         }
-      } finally {
-        db.close();
-      }
+      });
     });
 
   tool
     .command('revoke <name>')
     .description('Delete a tool and its grants')
     .option('--db <path>', 'override database path')
-    .action((name: string, opts: { db?: string }) => {
-      const db = openDb(opts.db ? { path: opts.db } : {});
-      try {
-        const ok = new Tools(db).revoke(name);
-        console.log(ok ? `revoked ${name}` : `no tool named ${name}`);
-      } finally {
-        db.close();
-      }
+    .action(async (name: string, opts: CommonCliOptions) => {
+      await withAppContext(opts, (ctx) => {
+        console.log(ctx.tools.revoke(name) ? `revoked ${name}` : `no tool named ${name}`);
+      });
     });
 
   tool
     .command('rotate <name>')
     .description('Rotate a tool bearer token')
     .option('--db <path>', 'override database path')
-    .action((name: string, opts: { db?: string }) => {
-      const db = openDb(opts.db ? { path: opts.db } : {});
-      try {
-        const token = new Tools(db).rotateToken(name);
+    .action(async (name: string, opts: CommonCliOptions) => {
+      await withAppContext(opts, (ctx) => {
+        const token = ctx.tools.rotateToken(name);
         console.log(`New token for '${name}':`);
         console.log(`  ${token}`);
-        console.log(`(DB: ${opts.db ?? defaultDbPath()})`);
-      } finally {
-        db.close();
-      }
+        console.log(`(DB: ${ctx.config.dbPath})`);
+      });
     });
 }
 

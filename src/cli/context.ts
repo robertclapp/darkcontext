@@ -1,29 +1,30 @@
-import { openDb, type DarkContextDb } from '../core/store/db.js';
-import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
-import type { EmbeddingProvider, ProviderKind } from '../core/embeddings/index.js';
-import { Memories } from '../core/memories/index.js';
+import { AppContext, type ContextInit } from '../core/context.js';
+import type { ProviderKind } from '../core/embeddings/index.js';
 
-export interface CliOptions {
+/**
+ * Options every CLI subcommand accepts. Translated into a `ContextInit`
+ * that `AppContext.open` consumes. Keeping the shape identical across
+ * subcommands reduces bespoke plumbing inside each action.
+ */
+export interface CommonCliOptions {
   db?: string;
-  provider?: string;
+  provider?: ProviderKind;
 }
 
-export interface CliContext {
-  db: DarkContextDb;
-  embeddings: EmbeddingProvider;
-  memories: Memories;
-  close(): void;
-}
-
-export function buildContext(opts: CliOptions = {}): CliContext {
-  const kind: ProviderKind = resolveProviderKind(opts.provider);
-  const embeddings = createEmbeddingProvider(kind);
-  const db = openDb(opts.db ? { path: opts.db } : {});
-  const memories = new Memories(db, embeddings);
-  return {
-    db,
-    embeddings,
-    memories,
-    close: () => db.close(),
+/**
+ * Open an AppContext, run the action, close on the way out (success or
+ * failure). Every CLI action uses this so the try/finally block lives in
+ * exactly one place.
+ */
+export async function withAppContext<T>(
+  opts: CommonCliOptions,
+  fn: (ctx: AppContext) => Promise<T> | T
+): Promise<T> {
+  const init: ContextInit = {
+    ...(opts.db ? { dbPath: opts.db } : {}),
+    ...(opts.provider ? { embeddings: opts.provider } : {}),
   };
+  return AppContext.run(init, fn);
 }
+
+export type { AppContext };

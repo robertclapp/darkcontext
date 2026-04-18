@@ -1,6 +1,33 @@
 import type { Command } from 'commander';
 
-import { buildContext } from '../context.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
+
+export interface RememberOptions extends CommonCliOptions {
+  kind: string;
+  scope?: string;
+  tags?: string;
+  source?: string;
+}
+
+export async function runRemember(
+  content: string,
+  opts: RememberOptions,
+  out: (line: string) => void = console.log
+): Promise<void> {
+  if (!content.trim()) throw new Error('remember: content is empty');
+  await withAppContext(opts, async (ctx) => {
+    const memory = await ctx.memories.remember({
+      content,
+      kind: opts.kind,
+      ...(opts.scope ? { scope: opts.scope } : {}),
+      tags: parseTags(opts.tags),
+      ...(opts.source ? { source: opts.source } : {}),
+    });
+    out(`#${memory.id} [${memory.scope ?? '-'}] ${memory.content}`);
+    if (memory.tags.length) out(`  tags: ${memory.tags.join(', ')}`);
+  });
+}
 
 export function registerRemember(program: Command): void {
   program
@@ -12,39 +39,12 @@ export function registerRemember(program: Command): void {
     .option('--source <source>', 'optional source label')
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
-    .action(
-      async (
-        contentParts: string[],
-        opts: {
-          kind: string;
-          scope?: string;
-          tags?: string;
-          source?: string;
-          db?: string;
-          provider?: string;
-        }
-      ) => {
-        const content = contentParts.join(' ').trim();
-        if (!content) throw new Error('remember: content is empty');
-        const ctx = buildContext(opts);
-        try {
-          const memory = await ctx.memories.remember({
-            content,
-            kind: opts.kind,
-            ...(opts.scope ? { scope: opts.scope } : {}),
-            tags: parseTags(opts.tags),
-            ...(opts.source ? { source: opts.source } : {}),
-          });
-          console.log(`#${memory.id} [${memory.scope ?? '-'}] ${memory.content}`);
-          if (memory.tags.length) console.log(`  tags: ${memory.tags.join(', ')}`);
-        } finally {
-          ctx.close();
-        }
-      }
-    );
+    .action(async (contentParts: string[], opts: RememberOptions) => {
+      await runRemember(contentParts.join(' ').trim(), opts);
+    });
 }
 
-function parseTags(raw?: string): string[] {
+function parseTags(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw.split(',').map((t) => t.trim()).filter(Boolean);
 }

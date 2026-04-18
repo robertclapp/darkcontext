@@ -1,4 +1,5 @@
 import type { DarkContextDb } from '../store/db.js';
+import { ValidationError } from '../errors.js';
 
 export interface Scope {
   id: number;
@@ -23,18 +24,21 @@ export class Scopes {
   }
 
   upsert(name: string, description?: string): Scope {
+    if (!name.trim()) throw new ValidationError('name', 'scope name is required');
     const existing = this.getByName(name);
     if (existing) return existing;
     this.db.raw
       .prepare('INSERT INTO scopes (name, description) VALUES (?, ?)')
       .run(name, description ?? null);
     const created = this.getByName(name);
-    if (!created) throw new Error(`Failed to create scope: ${name}`);
+    if (!created) throw new Error(`failed to create scope: ${name}`);
     return created;
   }
 
   remove(name: string): boolean {
-    if (name === 'default') throw new Error("cannot delete the 'default' scope");
+    if (name === 'default') {
+      throw new ValidationError('name', "the 'default' scope cannot be removed");
+    }
     const res = this.db.raw.prepare('DELETE FROM scopes WHERE name = ?').run(name);
     return res.changes > 0;
   }

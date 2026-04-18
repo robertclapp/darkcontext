@@ -1,11 +1,31 @@
 import type { Command } from 'commander';
 
-import { openDb } from '../../core/store/db.js';
-import { Memories } from '../../core/memories/index.js';
-import { Documents } from '../../core/documents/index.js';
-import { Conversations } from '../../core/conversations/index.js';
-import { createEmbeddingProvider, resolveProviderKind } from '../../core/embeddings/index.js';
-import { defaultDbPath } from '../../core/store/paths.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
+import { ValidationError } from '../../core/errors.js';
+
+type ReindexKind = 'memories' | 'documents' | 'history';
+const ALL_KINDS: readonly ReindexKind[] = ['memories', 'documents', 'history'];
+
+interface ReindexOptions extends CommonCliOptions {
+  only?: string;
+}
+
+export async function runReindex(
+  opts: ReindexOptions,
+  out: (l: string) => void = console.log
+): Promise<void> {
+  const want = parseOnly(opts.only);
+  await withAppContext(opts, async (ctx) => {
+    if (!ctx.db.hasVec) {
+      throw new Error('sqlite-vec is not loaded — reindex cannot run. Install the sqlite-vec native binary.');
+    }
+    out(`reindexing ${want.join(', ')} via ${ctx.embeddings.name} at ${ctx.config.dbPath}`);
+    if (want.includes('memories')) out(`  memories: ${await ctx.memories.reindex()} rows`);
+    if (want.includes('documents')) out(`  document_chunks: ${await ctx.documents.reindex()} rows`);
+    if (want.includes('history')) out(`  messages: ${await ctx.conversations.reindex()} rows`);
+  });
+}
 
 export function registerReindex(program: Command): void {
   program
@@ -16,47 +36,19 @@ export function registerReindex(program: Command): void {
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .option('--only <kinds>', 'comma-separated subset: memories,documents,history (default: all)')
-    .action(
-      async (opts: { db?: string; provider?: string; only?: string }) => {
-        const provider = createEmbeddingProvider(resolveProviderKind(opts.provider));
-        const db = openDb(opts.db ? { path: opts.db } : {});
-        try {
-          if (!db.hasVec) {
-            console.error('sqlite-vec is not loaded — reindex is a no-op. Install the sqlite-vec native binary.');
-            process.exit(2);
-          }
-          const want = parseOnly(opts.only);
-          console.log(`reindexing ${want.join(', ')} via ${provider.name} at ${opts.db ?? defaultDbPath()}`);
-
-          if (want.includes('memories')) {
-            const n = await new Memories(db, provider).reindex();
-            console.log(`  memories: ${n} rows`);
-          }
-          if (want.includes('documents')) {
-            const n = await new Documents(db, provider).reindex();
-            console.log(`  document_chunks: ${n} rows`);
-          }
-          if (want.includes('history')) {
-            const n = await new Conversations(db, provider).reindex();
-            console.log(`  messages: ${n} rows`);
-          }
-        } finally {
-          db.close();
-        }
-      }
-    );
+    .action(async (opts: ReindexOptions) => {
+      await runReindex(opts);
+    });
 }
 
-function parseOnly(raw: string | undefined): Array<'memories' | 'documents' | 'history'> {
-  const all: Array<'memories' | 'documents' | 'history'> = ['memories', 'documents', 'history'];
-  if (!raw) return all;
-  const names = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  const out: Array<'memories' | 'documents' | 'history'> = [];
-  for (const name of names) {
-    if (name === 'memories' || name === 'documents' || name === 'history') {
-      out.push(name);
+function parseOnly(raw: string | undefined): ReindexKind[] {
+  if (!raw) return [...ALL_KINDS];
+  const out: ReindexKind[] = [];
+  for (const name of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    if ((ALL_KINDS as readonly string[]).includes(name)) {
+      out.push(name as ReindexKind);
     } else {
-      throw new Error(`unknown --only kind: ${name} (expected memories | documents | history)`);
+      throw new ValidationError('only', `unknown kind '${name}' (expected memories | documents | history)`);
     }
   }
   return out;

@@ -1,9 +1,11 @@
 import { EmbeddingError, type EmbeddingProvider } from './provider.js';
 
 export interface OllamaOptions {
-  url?: string;
-  model?: string;
-  /** Pre-known dimension; if omitted we probe once with a dummy embed. */
+  /** Ollama server URL (trailing slash will be stripped). */
+  url: string;
+  /** Embedding model name. */
+  model: string;
+  /** Pre-known dimension; if omitted we learn it from the first embed. */
   dimension?: number;
 }
 
@@ -13,9 +15,9 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   private readonly url: string;
   private readonly model: string;
 
-  constructor(opts: OllamaOptions = {}) {
-    this.url = (opts.url ?? process.env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/$/, '');
-    this.model = opts.model ?? process.env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text';
+  constructor(opts: OllamaOptions) {
+    this.url = opts.url.replace(/\/$/, '');
+    this.model = opts.model;
     this._dimension = opts.dimension ?? 0;
   }
 
@@ -25,10 +27,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   async embed(texts: string[]): Promise<number[][]> {
     const vecs: number[][] = [];
-    for (const t of texts) {
-      const v = await this.embedOne(t);
-      vecs.push(v);
-    }
+    for (const t of texts) vecs.push(await this.embedOne(t));
     if (this._dimension === 0 && vecs[0]) this._dimension = vecs[0].length;
     return vecs;
   }

@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 
-import { openDb } from '../../core/store/db.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
 import { AuditLog } from '../../core/audit/index.js';
 
 export function registerAuditCommands(program: Command): void {
@@ -14,10 +15,9 @@ export function registerAuditCommands(program: Command): void {
     .option('--outcome <o>', 'filter by outcome (ok | denied | error)')
     .option('--db <path>', 'override database path')
     .action(
-      (opts: { limit: number; tool?: string; outcome?: string; db?: string }) => {
-        const db = openDb(opts.db ? { path: opts.db } : {});
-        try {
-          const rows = new AuditLog(db, null).list({
+      async (opts: CommonCliOptions & { limit: number; tool?: string; outcome?: string }) => {
+        await withAppContext(opts, (ctx) => {
+          const rows = new AuditLog(ctx.db, null).list({
             limit: opts.limit,
             ...(opts.tool ? { toolName: opts.tool } : {}),
             ...(opts.outcome ? { outcome: opts.outcome } : {}),
@@ -31,9 +31,7 @@ export function registerAuditCommands(program: Command): void {
               `${when}  ${r.toolName.padEnd(16)} ${r.mcpTool.padEnd(20)} ${r.outcome.padEnd(6)} ${r.durationMs}ms  args=${args}${err}`
             );
           }
-        } finally {
-          db.close();
-        }
+        });
       }
     );
 
@@ -42,15 +40,12 @@ export function registerAuditCommands(program: Command): void {
     .description('Delete audit rows older than the given ISO timestamp')
     .requiredOption('--before <iso>', 'ISO timestamp (exclusive)')
     .option('--db <path>', 'override database path')
-    .action((opts: { before: string; db?: string }) => {
+    .action(async (opts: CommonCliOptions & { before: string }) => {
       const before = Date.parse(opts.before);
       if (Number.isNaN(before)) throw new Error(`unparseable timestamp: ${opts.before}`);
-      const db = openDb(opts.db ? { path: opts.db } : {});
-      try {
-        const n = new AuditLog(db, null).prune(before);
+      await withAppContext(opts, (ctx) => {
+        const n = new AuditLog(ctx.db, null).prune(before);
         console.log(`pruned ${n} audit rows older than ${opts.before}`);
-      } finally {
-        db.close();
-      }
+      });
     });
 }

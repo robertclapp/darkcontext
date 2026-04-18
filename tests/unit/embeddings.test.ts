@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { StubEmbeddingProvider } from '../../src/core/embeddings/stub.js';
-import { resolveProviderKind, createEmbeddingProvider } from '../../src/core/embeddings/index.js';
+import { createEmbeddingProvider } from '../../src/core/embeddings/index.js';
 
 describe('StubEmbeddingProvider', () => {
   it('produces unit-norm vectors of the requested dimension', async () => {
@@ -27,25 +27,28 @@ describe('StubEmbeddingProvider', () => {
   });
 });
 
-describe('resolveProviderKind', () => {
-  it('defaults to stub', () => {
-    expect(resolveProviderKind()).toBe('stub');
-  });
-
-  it('accepts explicit kinds', () => {
-    expect(resolveProviderKind('ollama')).toBe('ollama');
-    expect(resolveProviderKind('onnx')).toBe('onnx');
-  });
-
-  it('rejects unknown kinds', () => {
-    expect(() => resolveProviderKind('gemini')).toThrow();
-  });
-});
-
 describe('createEmbeddingProvider', () => {
-  it('returns a stub provider by default', () => {
-    const p = createEmbeddingProvider('stub');
+  it('defaults to the stub provider when no kind is given', () => {
+    const p = createEmbeddingProvider();
     expect(p.name).toBe('stub');
     expect(p.dimension).toBeGreaterThan(0);
+  });
+
+  it('builds the requested provider', () => {
+    expect(createEmbeddingProvider({ kind: 'stub' }).name).toBe('stub');
+    expect(createEmbeddingProvider({ kind: 'ollama' }).name).toBe('ollama');
+    expect(createEmbeddingProvider({ kind: 'onnx' }).name).toBe('onnx');
+  });
+
+  it('respects a supplied Config when constructing remote providers', () => {
+    const provider = createEmbeddingProvider({
+      kind: 'ollama',
+      config: {
+        embeddings: 'ollama',
+        ollama: { url: 'http://example.local:11434', model: 'test-model' },
+        onnx: { model: 'Xenova/all-MiniLM-L6-v2' },
+      },
+    });
+    expect(provider.name).toBe('ollama');
   });
 });

@@ -2,6 +2,7 @@ import type { DarkContextDb } from '../store/db.js';
 import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 
 import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
 
@@ -34,6 +35,7 @@ export class Memories {
   }
 
   async remember(input: NewMemory): Promise<Memory> {
+    if (!input.content.trim()) throw new ValidationError('content', 'must not be empty');
     const now = Date.now();
     const scopeId = resolveScopeOrDefault(this.db.raw, input.scope);
     const tagsJson = JSON.stringify(input.tags ?? []);
@@ -60,7 +62,7 @@ export class Memories {
     const row = this.db.raw
       .prepare(`${BASE_SELECT} WHERE m.id = ?`)
       .get(id) as MemoryRow | undefined;
-    if (!row) throw new Error(`Memory ${id} not found`);
+    if (!row) throw new NotFoundError('memory', id);
     return rowToMemory(row);
   }
 

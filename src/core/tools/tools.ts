@@ -1,5 +1,6 @@
 import type { DarkContextDb } from '../store/db.js';
 import { Scopes } from '../scopes/scopes.js';
+import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 import type { NewToolInput, ProvisionedTool, Tool, ToolGrant, ToolWithGrants } from './types.js';
 import { generateToken, hashToken } from './tokens.js';
@@ -25,11 +26,11 @@ export class Tools {
   }
 
   create(input: NewToolInput): ProvisionedTool {
-    if (!input.name.trim()) throw new Error('tool name is required');
-    if (input.scopes.length === 0) throw new Error('at least one scope is required');
+    if (!input.name.trim()) throw new ValidationError('name', 'tool name is required');
+    if (input.scopes.length === 0) throw new ValidationError('scopes', 'at least one scope is required');
 
     const existing = this.findByName(input.name);
-    if (existing) throw new Error(`tool already exists: ${input.name}`);
+    if (existing) throw new ConflictError('tool', input.name);
 
     const token = generateToken();
     const tokenHash = hashToken(token);
@@ -76,7 +77,7 @@ export class Tools {
     const row = this.db.raw
       .prepare('SELECT id, name, created_at, last_seen_at FROM tools WHERE id = ?')
       .get(id) as ToolRow | undefined;
-    if (!row) throw new Error(`tool ${id} not found`);
+    if (!row) throw new NotFoundError('tool', id);
     return rowToTool(row);
   }
 
@@ -118,7 +119,7 @@ export class Tools {
 
   rotateToken(name: string): string {
     const tool = this.findByName(name);
-    if (!tool) throw new Error(`tool not found: ${name}`);
+    if (!tool) throw new NotFoundError('tool', name);
     const token = generateToken();
     this.db.raw
       .prepare('UPDATE tools SET token_hash = ? WHERE id = ?')

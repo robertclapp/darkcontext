@@ -2,9 +2,38 @@ import type { Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
-import { openDb } from '../../core/store/db.js';
-import { Documents } from '../../core/documents/index.js';
-import { createEmbeddingProvider, resolveProviderKind } from '../../core/embeddings/index.js';
+import type { CommonCliOptions } from '../context.js';
+import { withAppContext } from '../context.js';
+
+export interface IngestOptions extends CommonCliOptions {
+  title?: string;
+  scope?: string;
+  mime: string;
+  chunkSize: number;
+  chunkOverlap: number;
+}
+
+export async function runIngest(
+  path: string,
+  opts: IngestOptions,
+  out: (line: string) => void = console.log
+): Promise<void> {
+  const abs = resolve(path);
+  const content = readFileSync(abs, 'utf8');
+  await withAppContext(opts, async (ctx) => {
+    const res = await ctx.documents.ingest(
+      {
+        title: opts.title ?? basename(abs),
+        content,
+        sourceUri: `file://${abs}`,
+        mime: opts.mime,
+        ...(opts.scope ? { scope: opts.scope } : {}),
+      },
+      { size: opts.chunkSize, overlap: opts.chunkOverlap }
+    );
+    out(`#${res.document.id} [${res.document.scope ?? '-'}] ${res.document.title} — ${res.chunks} chunks`);
+  });
+}
 
 export function registerIngest(program: Command): void {
   program
@@ -17,43 +46,7 @@ export function registerIngest(program: Command): void {
     .option('--chunk-overlap <n>', 'chunk overlap characters', (v) => Number(v), 150)
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
-    .action(
-      async (
-        path: string,
-        opts: {
-          title?: string;
-          scope?: string;
-          mime: string;
-          chunkSize: number;
-          chunkOverlap: number;
-          db?: string;
-          provider?: string;
-        }
-      ) => {
-        const abs = resolve(path);
-        const content = readFileSync(abs, 'utf8');
-        const db = openDb(opts.db ? { path: opts.db } : {});
-        try {
-          const documents = new Documents(
-            db,
-            createEmbeddingProvider(resolveProviderKind(opts.provider))
-          );
-          const res = await documents.ingest(
-            {
-              title: opts.title ?? basename(abs),
-              content,
-              sourceUri: `file://${abs}`,
-              mime: opts.mime,
-              ...(opts.scope ? { scope: opts.scope } : {}),
-            },
-            { size: opts.chunkSize, overlap: opts.chunkOverlap }
-          );
-          console.log(
-            `#${res.document.id} [${res.document.scope ?? '-'}] ${res.document.title} — ${res.chunks} chunks`
-          );
-        } finally {
-          db.close();
-        }
-      }
-    );
+    .action(async (path: string, opts: IngestOptions) => {
+      await runIngest(path, opts);
+    });
 }
