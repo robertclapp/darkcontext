@@ -166,12 +166,10 @@ export class Conversations {
 
   /** Re-embed every message. Used by `dcx reindex`. Returns message count. */
   async reindex(): Promise<number> {
-    this.vectors.truncate();
     const rows = this.db.raw
       .prepare('SELECT id, role, content FROM messages ORDER BY id')
       .all() as Array<{ id: number; role: string; content: string }>;
-    if (rows.length === 0) return 0;
-    await this.vectors.write(
+    await this.vectors.reindex(
       rows.map((r) => r.id),
       rows.map((r) => `${r.role}: ${r.content}`)
     );

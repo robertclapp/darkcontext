@@ -112,12 +112,10 @@ export class Memories {
    * after swapping embedding providers or recovering from a failed write.
    */
   async reindex(): Promise<number> {
-    this.vectors.truncate();
     const rows = this.db.raw
       .prepare('SELECT id, content FROM memories ORDER BY id')
       .all() as Array<{ id: number; content: string }>;
-    if (rows.length === 0) return 0;
-    await this.vectors.write(
+    await this.vectors.reindex(
       rows.map((r) => r.id),
       rows.map((r) => r.content)
     );

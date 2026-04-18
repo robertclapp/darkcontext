@@ -1,15 +1,12 @@
--- DarkContext schema (M1 subset)
--- Vector tables created separately in db.ts so embed dim can vary per provider.
+-- DarkContext schema.
+-- Applied idempotently on every `openDb()` — additive changes only.
+-- Vector tables (memories_vec, document_chunks_vec, messages_vec) are
+-- created separately in db.ts so their FLOAT[N] dim can track the active
+-- embedding provider. Pragmas (journal_mode, foreign_keys) and the `meta`
+-- table bootstrap are handled in db.ts BEFORE this file is executed, so
+-- schema.sql starts its lifetime with `meta.schema_version` readable.
 
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-
-CREATE TABLE IF NOT EXISTS meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
--- Identity & access (stubs used in M1, enforced in M2)
+-- Identity & access
 CREATE TABLE IF NOT EXISTS tools (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   name         TEXT    NOT NULL UNIQUE,
