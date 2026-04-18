@@ -144,15 +144,16 @@ Clients POST JSON-RPC to `http://127.0.0.1:4000/mcp` with
 
 Every setting has an env var; call `dcx doctor` to sanity-check them.
 
-| Variable                         | Default                 | Purpose                                  |
-|----------------------------------|-------------------------|------------------------------------------|
-| `DARKCONTEXT_HOME`               | `~/.darkcontext`        | Data directory                           |
-| `DARKCONTEXT_DB`                 | `$HOME/store.db`        | Override DB path                         |
-| `DARKCONTEXT_TOKEN`              | —                       | Bearer token for stdio / HTTP            |
-| `DARKCONTEXT_EMBEDDINGS`         | `stub`                  | `stub` \| `ollama` \| `onnx`             |
-| `DARKCONTEXT_ENCRYPTION_KEY`     | —                       | Enables SQLCipher at rest (see docs)     |
-| `OLLAMA_URL`                     | `http://localhost:11434`| Ollama server                            |
-| `OLLAMA_EMBED_MODEL`             | `nomic-embed-text`      | Embedding model                          |
+| Variable                         | Default                      | Purpose                                  |
+|----------------------------------|------------------------------|------------------------------------------|
+| `DARKCONTEXT_HOME`               | `~/.darkcontext`             | Data directory                           |
+| `DARKCONTEXT_DB_PATH`            | `$DARKCONTEXT_HOME/store.db` | Override DB path                         |
+| `DARKCONTEXT_TOKEN`              | —                            | Bearer token for stdio / HTTP            |
+| `DARKCONTEXT_EMBEDDINGS`         | `stub`                       | `stub` \| `ollama` \| `onnx`             |
+| `DARKCONTEXT_ENCRYPTION_KEY`     | —                            | Enables SQLCipher at rest (see docs)     |
+| `OLLAMA_URL`                     | `http://localhost:11434`     | Ollama server                            |
+| `OLLAMA_EMBED_MODEL`             | `nomic-embed-text`           | Embedding model                          |
+| `DARKCONTEXT_ONNX_MODEL`         | `Xenova/all-MiniLM-L6-v2`    | ONNX embedding model                     |
 
 ## Development
 
@@ -194,7 +195,7 @@ evals/
 └── scope-isolation/     adversarial cross-scope attacks
 
 tests/
-├── unit/                ~20 suites
+├── unit/                domain + security + tooling suites
 └── integration/         MCP + HTTP + backup
 ```
 
