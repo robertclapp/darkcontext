@@ -70,6 +70,11 @@ gets exactly the slice you grant it.
 
 Requires **Node 20+**.
 
+> **Tip:** `npm link` (or `npm install -g .`) after `npm run build` puts
+> `dcx` on your `$PATH`. The examples below use `node dist/cli/index.js`
+> so they work before linking; you can substitute `dcx` once the CLI is
+> installed globally.
+
 ```bash
 git clone https://github.com/robertclapp/darkcontext.git
 cd darkcontext
@@ -96,8 +101,6 @@ node dist/cli/index.js tool add claude-desktop --scopes personal,work
 node dist/cli/index.js serve                     # stdio
 node dist/cli/index.js serve --http --port 4000  # HTTP + Bearer auth
 ```
-
-After `npm link` (or `npm install -g .`) the CLI is on your `$PATH` as `dcx`.
 
 ### Using Ollama for real semantic embeddings
 
