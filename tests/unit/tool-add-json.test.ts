@@ -56,23 +56,50 @@ describe('dcx tool add --json', () => {
       { db: dbPath, scopes: 'shared', readOnly: true, json: true },
       (l) => lines.push(l)
     );
+    expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]!) as ToolAddJsonOutput;
+    expect(parsed.grants).toHaveLength(1);
+    expect(parsed.grants[0]!.scope).toBe('shared');
     expect(parsed.grants[0]!.canRead).toBe(true);
     expect(parsed.grants[0]!.canWrite).toBe(false);
   });
 
-  it('passes --db through to the emitted mcpServerConfig.args', async () => {
+  it('emits exact mcpServerConfig.args order (contract — launchers paste it verbatim)', async () => {
     const lines: string[] = [];
     await runToolAdd(
       't',
       { db: dbPath, scopes: 'default', readOnly: false, json: true },
       (l) => lines.push(l)
     );
+    expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]!) as ToolAddJsonOutput;
-    // "--db <path>" must survive into the args array so pasted configs
-    // stay usable when the store path is non-default.
-    expect(parsed.mcpServerConfig.args).toContain('--db');
-    expect(parsed.mcpServerConfig.args).toContain(dbPath);
+    // Strict equality (not `toContain`) so a reorder or an extra arg
+    // shows up as a contract break, not a silent passing test.
+    expect(parsed.mcpServerConfig.args).toEqual(['serve', '--db', dbPath]);
+  });
+
+  it('normalizes --scopes: trims, drops empties, dedupes', async () => {
+    const lines: string[] = [];
+    await runToolAdd(
+      'norm',
+      { db: dbPath, scopes: ' work , , work , personal ,', readOnly: false, json: true },
+      (l) => lines.push(l)
+    );
+    const parsed = JSON.parse(lines[0]!) as ToolAddJsonOutput;
+    // Grants come back alphabetized by `Tools.grantsFor` (`ORDER BY s.name`);
+    // the important invariants here are the dedup + the trim, not the order.
+    expect(parsed.grants.map((g) => g.scope).sort()).toEqual(['personal', 'work']);
+    expect(parsed.grants).toHaveLength(2);
+  });
+
+  it('rejects an all-empty --scopes value with ValidationError', async () => {
+    await expect(
+      runToolAdd(
+        'empty',
+        { db: dbPath, scopes: ',, ,', readOnly: false, json: true },
+        () => undefined
+      )
+    ).rejects.toThrow(/at least one non-empty scope/);
   });
 
   it('without --json, falls back to the human banner (multiple lines)', async () => {

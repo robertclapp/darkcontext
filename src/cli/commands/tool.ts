@@ -3,6 +3,7 @@ import type { Command } from 'commander';
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
 import type { ProvisionedTool } from '../../core/tools/index.js';
+import { ValidationError } from '../../core/errors.js';
 
 export interface ToolAddOptions extends CommonCliOptions {
   scopes: string;
@@ -20,7 +21,7 @@ export interface ToolAddOptions extends CommonCliOptions {
  * Claude Desktop config generator in MCP clients) can depend on this
  * object staying shape-stable across patch releases. Fields:
  *
- *   tool         — the stored row (id, name, timestamps, last_seen).
+ *   tool         — the stored row: `{ id, name, createdAt, lastSeenAt }`.
  *   token        — plaintext bearer token. Returned ONCE by construction;
  *                  the store keeps only the sha256 hash.
  *   grants       — explicit permissions per scope.
@@ -43,10 +44,18 @@ export async function runToolAdd(
   opts: ToolAddOptions,
   out: (line: string) => void = console.log
 ): Promise<void> {
+  // Normalize before handing to Tools.create: trim each entry, drop
+  // empties (e.g. `--scopes "work,,"`), and dedupe. Duplicates would
+  // otherwise hit the tool_scopes PK and surface as a confusing raw
+  // SQLite constraint error instead of a friendly ValidationError.
+  const scopes = normalizeScopes(opts.scopes);
+  if (scopes.length === 0) {
+    throw new ValidationError('scopes', 'at least one non-empty scope is required');
+  }
   await withAppContext(opts, (ctx) => {
     const result = ctx.tools.create({
       name,
-      scopes: parseList(opts.scopes),
+      scopes,
       readOnly: opts.readOnly,
     });
 
@@ -138,6 +147,15 @@ export function registerToolCommands(program: Command): void {
     });
 }
 
-function parseList(raw: string): string[] {
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+/** Split comma-separated input, trim, drop empties, preserve first-seen order. */
+function normalizeScopes(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
 }
