@@ -43,9 +43,16 @@ export async function runDoctor(
     out(`provider:           ${ctx.embeddings.name}`);
 
     // Integrity check — cheap on healthy stores, loud on damaged ones.
+    // A healthy DB returns a single row with value "ok"; corrupt DBs
+    // return multiple rows, one per issue. Show all of them so operators
+    // aren't misled by only seeing the first problem.
     const integrity = ctx.db.raw.pragma('integrity_check') as Array<{ integrity_check: string }>;
-    const first = integrity[0]?.integrity_check ?? '(no output)';
-    out(`integrity_check:    ${first}`);
+    const messages = integrity.map((r) => r.integrity_check);
+    const healthy = messages.length === 1 && messages[0] === 'ok';
+    out(`integrity_check:    ${healthy ? 'ok' : 'FAILED'}`);
+    if (!healthy) {
+      for (const m of messages) out(`                    ${m}`);
+    }
 
     try {
       const [v] = await ctx.embeddings.embed(['darkcontext healthcheck']);

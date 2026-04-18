@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { runDoctor } from '../../src/cli/commands/doctor.js';
 import { runRemember } from '../../src/cli/commands/remember.js';
 import { runShow } from '../../src/cli/commands/show.js';
 import { runVacuum } from '../../src/cli/commands/vacuum.js';
 import { NotFoundError } from '../../src/core/errors.js';
+import { VERSION, SCHEMA_VERSION } from '../../src/core/constants.js';
 
 function capture(): { lines: string[]; write: (l: string) => void } {
   const lines: string[] = [];
@@ -36,7 +38,7 @@ describe('dcx show', () => {
     expect(text).toContain('source:  note-2025');
     expect(text).toContain('tags:    audio, hardware');
     // Content is the last block, separated by a blank line.
-    expect(cap.lines[cap.lines.length - 1]).toBe('the turntable needs a new stylus');
+    expect(cap.lines.at(-1)).toBe('the turntable needs a new stylus');
   });
 
   it('throws NotFoundError for an unknown id — bubbles up as exit 66', async () => {
@@ -91,5 +93,35 @@ describe('dcx vacuum', () => {
     ).c;
     after.close();
     expect(afterCount).toBe(0);
+  });
+
+  // Intentionally no test for the "integrity_check FAILED" branch:
+  // SQLite's integrity_check is structural (B-tree / page-level), so
+  // the only way to drive it to a non-"ok" response is to corrupt the
+  // file at byte level. Simulating that from inside better-sqlite3 is
+  // brittle and platform-sensitive. The branch is small and obvious
+  // by inspection; covering it here would be make-work.
+});
+
+describe('dcx doctor', () => {
+  let dir: string;
+  let dbPath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dcx-doc-'));
+    dbPath = join(dir, 'store.db');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('prints schema version, integrity, embed probe, and table counts', async () => {
+    await runRemember('first memory', { db: dbPath, kind: 'fact' }, () => undefined);
+    const cap = capture();
+    await runDoctor({ db: dbPath }, cap.write);
+    const text = cap.lines.join('\n');
+    expect(text).toContain(`schema version:     ${SCHEMA_VERSION} (binary supports ${SCHEMA_VERSION})`);
+    expect(text).toContain('integrity_check:    ok');
+    expect(text).toContain('embed sample:       ok');
+    expect(text).toMatch(/memories\s+1/);
+    // Version isn't printed by doctor but the constant should be non-empty.
+    expect(VERSION.length).toBeGreaterThan(0);
   });
 });

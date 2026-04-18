@@ -75,15 +75,23 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     const expectedHash = hashToken(token);
     const boundTransport = transport;
     const httpServer = createServer(async (req, res) => {
-      // Unauthenticated health probe — operationally useful for
-      // uptime monitoring + load balancer readiness checks. Returns
-      // only public metadata (version + schema version + `ok: true`).
-      // No bearer required precisely BECAUSE it's safe to serve
-      // anonymously; anything private stays behind /mcp.
-      if (req.method === 'GET' && req.url === '/healthz') {
+      // Unauthenticated health probe — operationally useful for uptime
+      // monitoring + load balancer readiness checks. Returns only public
+      // metadata (version + schema version + `ok: true`). No bearer
+      // required precisely BECAUSE it's safe to serve anonymously;
+      // anything private stays behind /mcp.
+      //
+      // Supports both GET (return JSON body) and HEAD (headers only).
+      // Load balancers commonly probe with HEAD to avoid body transfer;
+      // the two share the same status + content-type.
+      if ((req.method === 'GET' || req.method === 'HEAD') && req.url === '/healthz') {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ ok: true, version: VERSION, schemaVersion: SCHEMA_VERSION }));
+        if (req.method === 'HEAD') {
+          res.end();
+        } else {
+          res.end(JSON.stringify({ ok: true, version: VERSION, schemaVersion: SCHEMA_VERSION }));
+        }
         return;
       }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);

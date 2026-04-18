@@ -108,6 +108,15 @@ describe('HTTP transport bearer auth', () => {
     expect(body.schemaVersion).toBeGreaterThan(0);
   });
 
+  it('supports HEAD /healthz (load balancers probe with HEAD to skip the body)', async () => {
+    const res = await fetch(`${baseUrl}/healthz`, { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    // HEAD responses must not carry a body.
+    const text = await res.text();
+    expect(text).toBe('');
+  });
+
   it('rejects cleanly when the bind port is already in use (does not crash the process)', async () => {
     // Start a second server on the same port as the first one. Previously
     // the listen() wrapper only resolved on success, so EADDRINUSE escaped

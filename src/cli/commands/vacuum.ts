@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import type Database from 'better-sqlite3';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
@@ -21,26 +22,35 @@ export async function runVacuum(
   await withAppContext(opts, (ctx) => {
     const db = ctx.db.raw;
 
-    // Phase 1: integrity check.
+    // Phase 1: integrity check. PRAGMA integrity_check can return multiple
+    // rows when the DB has multiple issues; show all of them so the user
+    // sees the full picture before the store is further touched.
     const integrityRows = db.pragma('integrity_check') as Array<{ integrity_check: string }>;
-    const firstCheck = integrityRows[0]?.integrity_check ?? '';
-    out(`integrity_check: ${firstCheck || '(no output)'}`);
-    if (firstCheck !== 'ok') {
+    const messages = integrityRows.map((r) => r.integrity_check);
+    const healthy = messages.length === 1 && messages[0] === 'ok';
+    out(`integrity_check: ${healthy ? 'ok' : 'FAILED'}`);
+    if (!healthy) {
+      for (const m of messages) out(`  ${m}`);
       throw new ConfigError(
-        `integrity check failed — inspect the store before continuing. First result: ${firstCheck}`
+        `integrity check failed — inspect the store before continuing (${messages.length} issue${messages.length === 1 ? '' : 's'})`
       );
     }
 
-    // Phase 2: orphan cleanup across the three vec tables.
-    // A healthy store has zero orphans; we report whatever we find and
-    // delete them so the next reindex starts clean.
-    let orphans = 0;
+    // Phase 2: orphan cleanup across the three vec tables. Skipped when
+    // sqlite-vec is unavailable OR when no embeddings have ever been
+    // written (embedDim === 0) — in both cases there are no vec tables
+    // to scan. The status line distinguishes "clean" from "skipped" so
+    // the user isn't misled into thinking we verified something we didn't.
     if (ctx.db.hasVec && ctx.db.embedDim > 0) {
+      let orphans = 0;
       orphans += dropOrphans(db, 'memories_vec', 'memories');
       orphans += dropOrphans(db, 'document_chunks_vec', 'document_chunks');
       orphans += dropOrphans(db, 'messages_vec', 'messages');
+      out(`orphan vec rows removed: ${orphans}`);
+    } else {
+      const reason = !ctx.db.hasVec ? 'sqlite-vec not loaded' : 'no vectors written yet';
+      out(`orphan vec rows removed: 0 (skipped — ${reason})`);
     }
-    out(`orphan vec rows removed: ${orphans}`);
 
     // Phase 3: VACUUM. Rewrites the file to reclaim space from deleted
     // rows. Safe to run on a live store; better-sqlite3 holds a single
@@ -50,11 +60,10 @@ export async function runVacuum(
   });
 }
 
-function dropOrphans(
-  db: import('better-sqlite3').Database,
-  vecTable: string,
-  srcTable: string
-): number {
+// `vecTable` and `srcTable` are string-interpolated into SQL on purpose —
+// they come from a closed set of literals in the caller above, not from
+// user input. Keep it that way: never pass a user-supplied value here.
+function dropOrphans(db: Database.Database, vecTable: string, srcTable: string): number {
   const res = db
     .prepare(
       `DELETE FROM ${vecTable}
