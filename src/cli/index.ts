@@ -10,6 +10,9 @@ import { registerDoctor } from './commands/doctor.js';
 import { registerToolCommands } from './commands/tool.js';
 import { registerScopeCommands } from './commands/scope.js';
 import { registerServe } from './commands/serve.js';
+import { registerIngest } from './commands/ingest.js';
+import { registerDocumentCommands } from './commands/document.js';
+import { registerWorkspaceCommands } from './commands/workspace.js';
 
 const program = new Command();
 program
@@ -25,6 +28,9 @@ registerList(program);
 registerDoctor(program);
 registerToolCommands(program);
 registerScopeCommands(program);
+registerIngest(program);
+registerDocumentCommands(program);
+registerWorkspaceCommands(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

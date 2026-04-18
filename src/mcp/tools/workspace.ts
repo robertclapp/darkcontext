@@ -1,0 +1,97 @@
+import { z } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
+import type { ScopeFilter } from '../scopeFilter.js';
+import { toToolError } from './errors.js';
+
+export function registerWorkspaceTools(server: McpServer, filter: ScopeFilter): void {
+  server.registerTool(
+    'list_workspaces',
+    {
+      title: 'List workspaces',
+      description: 'List workspaces the calling tool can read.',
+      inputSchema: {},
+    },
+    () => {
+      try {
+        const workspaces = filter.listWorkspaces();
+        const lines = workspaces.map(
+          (w) => `${w.isActive ? '* ' : '  '}${w.name} [${w.scope ?? '-'}]`
+        );
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: workspaces.length === 0 ? '(no workspaces)' : lines.join('\n'),
+            },
+          ],
+          structuredContent: { workspaces },
+        };
+      } catch (err) {
+        return toToolError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'get_active_workspace',
+    {
+      title: 'Get the active workspace',
+      description:
+        'Return the currently active workspace if the calling tool can read it; null otherwise.',
+      inputSchema: {},
+    },
+    () => {
+      try {
+        const active = filter.getActiveWorkspace();
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: active ? `${active.name} [${active.scope ?? '-'}]` : '(no active workspace)',
+            },
+          ],
+          structuredContent: { workspace: active },
+        };
+      } catch (err) {
+        return toToolError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'add_to_workspace',
+    {
+      title: 'Add an item to a workspace',
+      description:
+        "Attach an item (kind: 'task', 'goal', 'note', 'thread', ...) to a workspace. If workspaceId is omitted, the active workspace is used.",
+      inputSchema: {
+        kind: z.string().min(1).describe("Item kind: task, goal, note, thread, etc."),
+        content: z.string().min(1).describe('Item body.'),
+        workspaceId: z.number().int().positive().optional().describe('Target workspace id; defaults to active.'),
+        state: z.string().optional().describe("Lifecycle state (default 'open')."),
+      },
+    },
+    (args) => {
+      try {
+        const item = filter.addToWorkspace({
+          kind: args.kind,
+          content: args.content,
+          ...(args.workspaceId !== undefined ? { workspaceId: args.workspaceId } : {}),
+          ...(args.state ? { state: args.state } : {}),
+        });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Added ${item.kind} #${item.id} to workspace ${item.workspaceId}.`,
+            },
+          ],
+          structuredContent: { item },
+        };
+      } catch (err) {
+        return toToolError(err);
+      }
+    }
+  );
+}

@@ -3,6 +3,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { Memories } from '../core/memories/index.js';
+import { Documents } from '../core/documents/index.js';
+import { Workspaces } from '../core/workspace/index.js';
 import { Tools } from '../core/tools/index.js';
 import { createEmbeddingProvider, resolveProviderKind } from '../core/embeddings/index.js';
 import { openDb } from '../core/store/db.js';
@@ -12,6 +14,8 @@ import { ScopeFilter } from './scopeFilter.js';
 import { registerRememberTool } from './tools/remember.js';
 import { registerRecallTool } from './tools/recall.js';
 import { registerForgetTool } from './tools/forget.js';
+import { registerSearchDocumentsTool } from './tools/searchDocuments.js';
+import { registerWorkspaceTools } from './tools/workspace.js';
 
 export interface ServeOptions {
   dbPath?: string;
@@ -38,6 +42,8 @@ export function buildServer(filter: ScopeFilter): McpServer {
   registerRememberTool(server, filter);
   registerRecallTool(server, filter);
   registerForgetTool(server, filter);
+  registerSearchDocumentsTool(server, filter);
+  registerWorkspaceTools(server, filter);
   return server;
 }
 
@@ -46,10 +52,12 @@ export async function startStdioServer(opts: ServeOptions = {}): Promise<Started
   const db = openDb(opts.dbPath ? { path: opts.dbPath } : {});
   const embeddings = createEmbeddingProvider(resolveProviderKind(opts.provider));
   const memories = new Memories(db, embeddings);
+  const documents = new Documents(db, embeddings);
+  const workspaces = new Workspaces(db);
   const toolsStore = new Tools(db);
 
   const callerTool = resolveToolFromEnv(toolsStore, opts.env);
-  const filter = new ScopeFilter(callerTool, memories);
+  const filter = new ScopeFilter(callerTool, { memories, documents, workspaces });
 
   const server = buildServer(filter);
   const transport: Transport = new StdioServerTransport();

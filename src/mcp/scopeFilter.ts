@@ -1,4 +1,16 @@
 import type { Memories, Memory, NewMemory, RecallHit } from '../core/memories/index.js';
+import type {
+  Documents,
+  DocumentChunkHit,
+  IngestInput,
+  IngestResult,
+} from '../core/documents/index.js';
+import type {
+  Workspace,
+  WorkspaceItem,
+  Workspaces,
+  NewWorkspaceItem,
+} from '../core/workspace/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
 
 /**
@@ -28,11 +40,25 @@ export class ScopeDeniedError extends Error {
   }
 }
 
+export interface FilterDeps {
+  memories: Memories;
+  documents: Documents;
+  workspaces: Workspaces;
+}
+
 export class ScopeFilter {
+  private readonly memories: Memories;
+  private readonly documents: Documents;
+  private readonly workspaces: Workspaces;
+
   constructor(
     private readonly tool: ToolWithGrants,
-    private readonly memories: Memories
-  ) {}
+    deps: FilterDeps
+  ) {
+    this.memories = deps.memories;
+    this.documents = deps.documents;
+    this.workspaces = deps.workspaces;
+  }
 
   get callerName(): string {
     return this.tool.name;
@@ -128,5 +154,89 @@ export class ScopeFilter {
     } catch {
       return null;
     }
+  }
+
+  // ---------- Documents ----------
+
+  async ingestDocument(input: IngestInput): Promise<IngestResult> {
+    const scope = input.scope ?? this.defaultWritableScope();
+    if (!scope) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' has no writable scopes`,
+        'write',
+        '(none)'
+      );
+    }
+    if (!this.canWrite(scope)) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' cannot write to scope '${scope}'`,
+        'write',
+        scope
+      );
+    }
+    return this.documents.ingest({ ...input, scope });
+  }
+
+  async searchDocuments(
+    query: string,
+    opts: { limit?: number; scope?: string } = {}
+  ): Promise<DocumentChunkHit[]> {
+    const readable = new Set(this.readableScopes());
+    if (readable.size === 0) return [];
+
+    if (opts.scope !== undefined) {
+      if (!readable.has(opts.scope)) {
+        throw new ScopeDeniedError(
+          `tool '${this.tool.name}' cannot read scope '${opts.scope}'`,
+          'read',
+          opts.scope
+        );
+      }
+      return this.documents.search(query, {
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        scope: opts.scope,
+      });
+    }
+
+    const limit = opts.limit ?? 10;
+    const raw = await this.documents.search(query, { limit: limit * 4 });
+    return raw.filter((h) => h.scope !== null && readable.has(h.scope)).slice(0, limit);
+  }
+
+  // ---------- Workspaces ----------
+
+  listWorkspaces(): Workspace[] {
+    const readable = new Set(this.readableScopes());
+    if (readable.size === 0) return [];
+    return this.workspaces
+      .list()
+      .filter((w) => w.scope !== null && readable.has(w.scope));
+  }
+
+  getActiveWorkspace(): Workspace | null {
+    const readable = new Set(this.readableScopes());
+    const active = this.workspaces.getActive();
+    if (!active) return null;
+    if (active.scope === null || !readable.has(active.scope)) return null;
+    return active;
+  }
+
+  addToWorkspace(item: NewWorkspaceItem & { workspaceId?: number }): WorkspaceItem {
+    const target = item.workspaceId
+      ? this.workspaces.getById(item.workspaceId)
+      : this.workspaces.getActive();
+    if (!target) throw new Error('no workspace specified and no active workspace set');
+    if (target.scope === null || !this.canWrite(target.scope)) {
+      throw new ScopeDeniedError(
+        `tool '${this.tool.name}' cannot write workspace '${target.name}' (scope '${target.scope ?? '-'}')`,
+        'write',
+        target.scope ?? '(none)'
+      );
+    }
+    return this.workspaces.addItem(target.id, {
+      kind: item.kind,
+      content: item.content,
+      ...(item.state ? { state: item.state } : {}),
+    });
   }
 }
