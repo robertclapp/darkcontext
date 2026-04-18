@@ -5,6 +5,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { AppContext, type ContextInit } from '../core/context.js';
 import { AuthError } from '../core/errors.js';
+import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT } from '../core/constants.js';
 import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
@@ -81,8 +82,8 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       }
     });
 
-    const port = opts.port ?? 4000;
-    const host = opts.host ?? '127.0.0.1';
+    const port = opts.port ?? DEFAULT_HTTP_PORT;
+    const host = opts.host ?? DEFAULT_HTTP_HOST;
     await new Promise<void>((done) => httpServer.listen(port, host, done));
     const address = httpServer.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;

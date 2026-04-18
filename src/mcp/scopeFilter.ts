@@ -18,6 +18,7 @@ import type {
 } from '../core/conversations/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
 import { ScopeDeniedError } from '../core/errors.js';
+import { RECALL_OVERFETCH_RATIO } from '../core/constants.js';
 
 /**
  * Security boundary between MCP callers and the domain modules.
@@ -105,7 +106,7 @@ export class ScopeFilter {
       });
     }
     return this.filterReadableHits(
-      await this.memories.recall(query, { limit: (opts.limit ?? 10) * 4 }),
+      await this.memories.recall(query, { limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
       (h) => h.memory.scope,
       opts.limit ?? 10
     );
@@ -140,7 +141,7 @@ export class ScopeFilter {
       });
     }
     return this.filterReadableHits(
-      await this.documents.search(query, { limit: (opts.limit ?? 10) * 4 }),
+      await this.documents.search(query, { limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
       (h) => h.scope,
       opts.limit ?? 10
     );
@@ -154,7 +155,7 @@ export class ScopeFilter {
       return this.conversations.search(query, opts);
     }
     return this.filterReadableHits(
-      await this.conversations.search(query, { ...opts, limit: (opts.limit ?? 10) * 4 }),
+      await this.conversations.search(query, { ...opts, limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
       (h) => h.scope,
       opts.limit ?? 10
     );
