@@ -5,7 +5,15 @@
 # Requires: dcx (npm install -g or local dist/), curl, jq.
 set -euo pipefail
 
-DB="${DB:-$(mktemp -d)/store.db}"
+# When the caller supplies DB, honor their path and don't touch its
+# directory. When they don't, we mint a fresh tempdir and REMEMBER that
+# we own it, so the EXIT trap can clean it up — previously every demo
+# run leaked a directory under /tmp.
+OWN_TMPDIR=""
+if [ -z "${DB:-}" ]; then
+  OWN_TMPDIR="$(mktemp -d)"
+  DB="$OWN_TMPDIR/store.db"
+fi
 PORT="${PORT:-4141}"
 
 echo "→ init store at $DB"
@@ -24,8 +32,15 @@ DARKCONTEXT_TOKEN="$TOKEN" dcx serve --http --port "$PORT" --db "$DB" >/tmp/dcx-
 SERVER_PID=$!
 # Handle interactive interrupts (Ctrl+C → SIGINT) and termination (SIGTERM)
 # alongside the normal EXIT path so the background server never outlives
-# the demo script.
-trap 'kill $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true' EXIT INT TERM
+# the demo script, and so the tempdir we own (if any) is cleaned up.
+cleanup() {
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  if [ -n "$OWN_TMPDIR" ]; then
+    rm -rf "$OWN_TMPDIR" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
 
 # Poll /healthz until bind completes. Loud failure if we give up — silent
 # exit made the downstream curl errors confusing to debug.

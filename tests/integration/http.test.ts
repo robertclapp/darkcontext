@@ -117,6 +117,22 @@ describe('HTTP transport bearer auth', () => {
     expect(text).toBe('');
   });
 
+  it('/healthz matches regardless of query string or trailing slash', async () => {
+    // Load balancers commonly append cache-busting query params and some
+    // proxies rewrite paths to end in `/`. All three shapes must 200.
+    for (const url of [`${baseUrl}/healthz?ts=12345`, `${baseUrl}/healthz/`, `${baseUrl}/healthz?`]) {
+      const res = await fetch(url);
+      expect(res.status, `url=${url}`).toBe(200);
+    }
+  });
+
+  it('other unknown paths still require auth (healthz routing does not bypass /mcp)', async () => {
+    // Defensive: make sure the healthz early-return doesn't accidentally
+    // open up OTHER paths as unauthenticated.
+    const res = await fetch(`${baseUrl}/admin`);
+    expect(res.status).toBe(401);
+  });
+
   it('rejects cleanly when the bind port is already in use (does not crash the process)', async () => {
     // Start a second server on the same port as the first one. Previously
     // the listen() wrapper only resolved on success, so EADDRINUSE escaped
