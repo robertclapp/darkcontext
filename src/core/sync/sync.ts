@@ -102,26 +102,35 @@ export async function push(opts: SyncOptions, now: number = opts.now ?? Date.now
   mkdirSync(dirname(destPath), { recursive: true });
 
   const lockBroken = acquireLock(destPath, 'push', now, opts.force === true);
-  const tmpPath = `${destPath}${TMP_SUFFIX}`;
-  cleanupTmp(tmpPath);
-
-  const src = openDb({
-    path: sourcePath,
-    ...(opts.encryptionKey ? { encryptionKey: opts.encryptionKey } : {}),
-  });
   try {
-    await src.raw.backup(tmpPath);
+    const tmpPath = `${destPath}${TMP_SUFFIX}`;
+    cleanupTmp(tmpPath);
+
+    const src = openDb({
+      path: sourcePath,
+      ...(opts.encryptionKey ? { encryptionKey: opts.encryptionKey } : {}),
+    });
+    try {
+      await src.raw.backup(tmpPath);
+    } finally {
+      src.close();
+    }
+
+    // Atomic publish: rename only succeeds when the temp file is fully
+    // written. A crashed push leaves the .tmp behind for the next run to
+    // sweep but never partially overwrites the destination.
+    renameSync(tmpPath, destPath);
+
+    return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
   } finally {
-    src.close();
+    // Release the lock whether the copy succeeded or blew up mid-way.
+    // If we crashed before the rename, the .tmp is still sitting next
+    // to the old destination and the next push will overwrite it; the
+    // destination itself is unchanged. Either way, leaving the lock
+    // behind would force the next operator to pass --force, which is
+    // worse than cleaning it up.
+    releaseLock(destPath);
   }
-
-  // Atomic publish: rename only succeeds when the temp file is fully
-  // written. A crashed push leaves the .tmp behind for the next run to
-  // sweep but never partially overwrites the destination.
-  renameSync(tmpPath, destPath);
-  releaseLock(destPath);
-
-  return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
 }
 
 /**
@@ -152,22 +161,25 @@ export async function pull(
   // Lock the SOURCE during pull — that's the file we're reading from.
   // A concurrent push to the same remote would corrupt the read.
   const lockBroken = acquireLock(sourcePath, 'pull', now, opts.force === true);
-  const tmpPath = `${destPath}${TMP_SUFFIX}`;
-  cleanupTmp(tmpPath);
-
-  const remote = openDb({
-    path: sourcePath,
-    ...(opts.encryptionKey ? { encryptionKey: opts.encryptionKey } : {}),
-  });
   try {
-    await remote.raw.backup(tmpPath);
-  } finally {
-    remote.close();
-  }
-  renameSync(tmpPath, destPath);
-  releaseLock(sourcePath);
+    const tmpPath = `${destPath}${TMP_SUFFIX}`;
+    cleanupTmp(tmpPath);
 
-  return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
+    const remote = openDb({
+      path: sourcePath,
+      ...(opts.encryptionKey ? { encryptionKey: opts.encryptionKey } : {}),
+    });
+    try {
+      await remote.raw.backup(tmpPath);
+    } finally {
+      remote.close();
+    }
+    renameSync(tmpPath, destPath);
+
+    return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
+  } finally {
+    releaseLock(sourcePath);
+  }
 }
 
 // ---------- internals ----------
@@ -198,7 +210,9 @@ function acquireLock(path: string, op: 'push' | 'pull', now: number, force: bool
       );
     }
     rmSync(lp, { force: true });
-    broken = !stale ? false : true;
+    // Surface only the *stale* lock breaks — a --force break is the
+    // operator's explicit choice and doesn't need to be echoed back.
+    broken = stale;
   }
   const body: LockBody = { host: hostname(), pid: process.pid, ts: now, op };
   writeFileSync(lp, JSON.stringify(body), { encoding: 'utf8', flag: 'wx' });
