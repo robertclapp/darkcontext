@@ -11,6 +11,8 @@ import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
 import { ScopeFilter } from './scopeFilter.js';
+import { handleUiApi, isUiApiPath } from './ui/api.js';
+import { INDEX_HTML } from './ui/page.js';
 
 export interface HttpServeOptions extends ContextInit {
   port?: number;
@@ -74,21 +76,22 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
 
     const expectedHash = hashToken(token);
     const boundTransport = transport;
+    const boundFilter = filter;
     const httpServer = createServer(async (req, res) => {
-      // Unauthenticated health probe — operationally useful for uptime
-      // monitoring + load balancer readiness checks. Returns only public
-      // metadata (version + schema version + `ok: true`). No bearer
-      // required precisely BECAUSE it's safe to serve anonymously;
-      // anything private stays behind /mcp.
+      // Path-based routing.
+      //   GET|HEAD /healthz    → public health probe (no bearer; only
+      //                          version + schema metadata)
+      //   GET /ui              → static HTML (unauthenticated; the page
+      //                          itself ships no sensitive data and the
+      //                          JS prompts for the bearer at first use)
+      //   /ui/api/*            → JSON API gated by the same bearer
+      //   anything else        → MCP transport, also bearer-gated
       //
-      // Supports both GET (return JSON body) and HEAD (headers only);
-      // load balancers commonly probe with HEAD to avoid body transfer.
-      //
-      // Matches on the parsed pathname rather than the raw `req.url`,
-      // so `GET /healthz?ts=12345` (LB cache-busters) and `/healthz/`
+      // Match on the parsed pathname rather than the raw `req.url`, so
+      // `GET /healthz?ts=12345` (LB cache-busters) and `/healthz/`
       // (proxy-rewritten paths) both route correctly.
+      const pathname = parsePathname(req.url);
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const pathname = parsePathname(req.url);
         if (pathname === '/healthz' || pathname === '/healthz/') {
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json');
@@ -99,6 +102,30 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
           }
           return;
         }
+      }
+      if (req.method === 'GET' && pathname === '/ui') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        // No-cache so an upgraded `dcx` binary serves a fresh UI.
+        res.setHeader('cache-control', 'no-store');
+        res.end(INDEX_HTML);
+        return;
+      }
+      if (isUiApiPath(pathname)) {
+        if (!checkBearer(req, expectedHash)) return unauthorized(res);
+        try {
+          await handleUiApi(req, res, boundFilter);
+        } catch (err) {
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader('content-type', 'application/json');
+            console.error('[darkcontext ui] api failed:', err);
+            res.end(JSON.stringify({ error: 'internal server error' }));
+          } else {
+            console.error('[darkcontext ui] error after headers sent:', err);
+          }
+        }
+        return;
       }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);
       try {
