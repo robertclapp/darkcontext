@@ -100,6 +100,23 @@ describe('sync (push / pull)', () => {
         push({ source: join(dir, 'nope.db'), dest: remoteDb })
       ).rejects.toBeInstanceOf(NotFoundError);
     });
+
+    it('releases the lock even when the copy fails mid-way', async () => {
+      // Point the dest at a path whose parent is a FILE (not a dir) so
+      // mkdirSync succeeds but renameSync/backup fails. A different
+      // recipe for failure than "source missing" — this one crashes
+      // AFTER acquireLock, exercising the try/finally.
+      const fs = await import('node:fs');
+      const parentFile = join(dir, 'blocker');
+      fs.writeFileSync(parentFile, 'i am not a directory');
+      const badDest = join(parentFile, 'oops.db');
+
+      // acquireLock() is the first thing that runs in push(). If the
+      // subsequent backup fails, the finally block must still remove
+      // the lock file so the next operator isn't blocked by a ghost.
+      await expect(push({ source: localDb, dest: badDest })).rejects.toThrow();
+      expect(fs.existsSync(`${badDest}.lock`)).toBe(false);
+    });
   });
 
   describe('pull', () => {
