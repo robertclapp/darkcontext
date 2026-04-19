@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { ConfigError } from './errors.js';
 import type { ProviderKind } from './embeddings/index.js';
+import type { LLMProviderKind } from './llm/index.js';
 import { DEFAULT_DEDUP_DISTANCE } from './constants.js';
 
 /**
@@ -33,6 +34,8 @@ export interface ConfigInit {
   encryptionKey?: string;
   /** Vector distance threshold for opt-in remember-dedup. Default: 0.15. */
   dedupDistance?: number;
+  /** Generative LLM provider for `summarize` and similar features. */
+  llm?: { kind?: LLMProviderKind; model?: string };
   ollama?: { url?: string; model?: string };
   onnx?: { model?: string };
 }
@@ -44,11 +47,15 @@ export interface Config {
   readonly token: string | undefined;
   readonly encryptionKey: string | undefined;
   readonly dedupDistance: number;
+  readonly llm: { kind: LLMProviderKind; model: string };
   readonly ollama: { url: string; model: string };
   readonly onnx: { model: string };
 }
 
 const PROVIDER_KINDS: readonly ProviderKind[] = ['stub', 'ollama', 'onnx'];
+const LLM_PROVIDER_KINDS: readonly LLMProviderKind[] = ['stub', 'ollama'];
+
+const DEFAULT_LLM_MODEL = 'llama3.2';
 
 function parseProviderKind(raw: string | undefined, fallback: ProviderKind = 'stub'): ProviderKind {
   if (!raw) return fallback;
@@ -80,6 +87,35 @@ function validateDedupDistanceOverride(n: number): number {
   return n;
 }
 
+function parseLLMProviderKind(
+  raw: string | undefined,
+  fallback: LLMProviderKind = 'stub'
+): LLMProviderKind {
+  if (!raw) return fallback;
+  const v = raw.toLowerCase();
+  if ((LLM_PROVIDER_KINDS as readonly string[]).includes(v)) return v as LLMProviderKind;
+  throw new ConfigError(`DARKCONTEXT_LLM: unknown provider '${raw}' (expected stub | ollama)`);
+}
+
+/**
+ * Resolve the LLM model name from env / override, with explicit rejection
+ * of empty / whitespace-only inputs. Without this gate
+ * `DARKCONTEXT_LLM_MODEL=""` would silently resolve to `''`, and the
+ * first call would either send an empty `model` to Ollama (404) or
+ * generate a `summarize` prompt with no model attribution. Fail loudly at
+ * config load instead of at first use.
+ */
+function parseLLMModel(raw: string | undefined, source: string): string {
+  if (raw === undefined) return DEFAULT_LLM_MODEL;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new ConfigError(
+      `${source}: must be a non-empty model name, got '${raw}' — unset to use the default ('${DEFAULT_LLM_MODEL}')`
+    );
+  }
+  return trimmed;
+}
+
 /** Build a `Config` from process.env plus optional overrides (overrides win). */
 export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = process.env): Config {
   const home = overrides.home ?? env.DARKCONTEXT_HOME ?? join(homedir(), '.darkcontext');
@@ -95,6 +131,11 @@ export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = 
     overrides.dedupDistance !== undefined
       ? validateDedupDistanceOverride(overrides.dedupDistance)
       : parseDedupDistance(env.DARKCONTEXT_DEDUP_DISTANCE);
+  const llmKind = overrides.llm?.kind ?? parseLLMProviderKind(env.DARKCONTEXT_LLM);
+  const llmModel =
+    overrides.llm?.model !== undefined
+      ? parseLLMModel(overrides.llm.model, 'overrides.llm.model')
+      : parseLLMModel(env.DARKCONTEXT_LLM_MODEL, 'DARKCONTEXT_LLM_MODEL');
   return {
     home,
     dbPath,
@@ -102,6 +143,7 @@ export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = 
     token: overrides.token ?? env.DARKCONTEXT_TOKEN,
     encryptionKey: overrides.encryptionKey ?? env.DARKCONTEXT_ENCRYPTION_KEY,
     dedupDistance,
+    llm: { kind: llmKind, model: llmModel },
     ollama: {
       url: (overrides.ollama?.url ?? env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/$/, ''),
       model: overrides.ollama?.model ?? env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text',

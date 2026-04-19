@@ -26,6 +26,7 @@ import { registerShow } from './commands/show.js';
 import { registerVacuum } from './commands/vacuum.js';
 import { registerConnect } from './commands/connect.js';
 import { registerPrune } from './commands/prune.js';
+import { registerSummarize } from './commands/summarize.js';
 
 const program = new Command();
 program
@@ -54,6 +55,7 @@ registerShow(program);
 registerVacuum(program);
 registerConnect(program);
 registerPrune(program);
+registerSummarize(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

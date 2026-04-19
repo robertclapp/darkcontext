@@ -60,6 +60,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       documents: ctx.documents,
       workspaces: ctx.workspaces,
       conversations: ctx.conversations,
+      summarize: ctx.summarize,
     });
     const auditor = ctx.newAuditLog(callerTool);
     mcpServer = buildServer(filter, auditor, ctx.config);

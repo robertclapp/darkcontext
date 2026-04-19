@@ -14,6 +14,7 @@ import { searchHistoryTool } from './searchHistory.js';
 import { listWorkspacesTool } from './listWorkspaces.js';
 import { getActiveWorkspaceTool } from './getActiveWorkspace.js';
 import { addToWorkspaceTool } from './addToWorkspace.js';
+import { summarizeTool } from './summarize.js';
 import type { McpToolDef } from './types.js';
 
 /**
@@ -30,6 +31,7 @@ export const ALL_MCP_TOOLS: readonly McpToolDef[] = [
   listWorkspacesTool,
   getActiveWorkspaceTool,
   addToWorkspaceTool,
+  summarizeTool,
 ];
 
 export function registerAllMcpTools(

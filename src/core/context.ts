@@ -13,6 +13,9 @@ import { Retention } from './retention/index.js';
 import { AuditLog } from './audit/index.js';
 import type { EmbeddingProvider, ProviderKind } from './embeddings/index.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
+import type { LLMProvider } from './llm/index.js';
+import { createLLMProvider } from './llm/index.js';
+import { Summarize } from './summarize/index.js';
 
 /**
  * Application context: the single place that wires the database and all
@@ -36,6 +39,7 @@ export class AppContext {
   readonly config: Config;
   readonly db: DarkContextDb;
   readonly embeddings: EmbeddingProvider;
+  readonly llm: LLMProvider;
   readonly memories: Memories;
   readonly documents: Documents;
   readonly workspaces: Workspaces;
@@ -43,6 +47,7 @@ export class AppContext {
   readonly scopes: Scopes;
   readonly tools: Tools;
   readonly retention: Retention;
+  readonly summarize: Summarize;
 
   private closed = false;
 
@@ -50,10 +55,12 @@ export class AppContext {
     config: Config;
     db: DarkContextDb;
     embeddings: EmbeddingProvider;
+    llm: LLMProvider;
   }) {
     this.config = params.config;
     this.db = params.db;
     this.embeddings = params.embeddings;
+    this.llm = params.llm;
     this.memories = new Memories(this.db, this.embeddings);
     this.documents = new Documents(this.db, this.embeddings);
     this.workspaces = new Workspaces(this.db);
@@ -66,6 +73,7 @@ export class AppContext {
       this.documents,
       this.conversations
     );
+    this.summarize = new Summarize(this.conversations, this.memories, this.llm);
   }
 
   /** Open a context from env + optional overrides. Caller owns the lifetime. */
@@ -78,7 +86,8 @@ export class AppContext {
 
     const providerKind: ProviderKind = init.embeddings ?? config.embeddings;
     const embeddings = createEmbeddingProvider({ kind: providerKind, config });
-    return new AppContext({ config, db, embeddings });
+    const llm = createLLMProvider({ kind: config.llm.kind, config });
+    return new AppContext({ config, db, embeddings, llm });
   }
 
   /** Scoped helper: open a context, run `fn`, close the context. */
