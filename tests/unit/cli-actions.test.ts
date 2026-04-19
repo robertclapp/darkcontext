@@ -148,4 +148,10 @@ describe('CLI actions (direct invocation)', () => {
     expect(parsed.memories).toHaveLength(1);
     expect(parsed.memories[0].content).toBe('fact');
   });
+
+  it('runExport rejects --scope "" / --out "" rather than silently defaulting', async () => {
+    await runRemember('leak-me-please', { db: dbPath, kind: 'fact', scope: 'secret' });
+    await expect(runExport({ db: dbPath, scope: '' }, () => undefined)).rejects.toThrow(/scope/);
+    await expect(runExport({ db: dbPath, out: '' }, () => undefined)).rejects.toThrow(/out/);
+  });
 });

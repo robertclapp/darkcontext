@@ -133,4 +133,19 @@ describe('exportSnapshot', () => {
     expect(snap).not.toHaveProperty('auditLog');
     expect(snap).not.toHaveProperty('tokens');
   });
+
+  it('rejects an empty or whitespace-only scope (does not silently export everything)', async () => {
+    const { ValidationError } = await import('../../src/core/errors.js');
+    await ctx.memories.remember({ content: 'leak-me-please', scope: 'secret' });
+    expect(() => exportSnapshot(ctx.db, { scope: '' })).toThrow(ValidationError);
+    expect(() => exportSnapshot(ctx.db, { scope: '   ' })).toThrow(ValidationError);
+  });
+
+  it('trims a valid scope so callers with stray whitespace still hit the right rows', async () => {
+    ctx.scopes.upsert('work');
+    await ctx.memories.remember({ content: 'work fact', scope: 'work' });
+    const snap = exportSnapshot(ctx.db, { scope: '  work  ' });
+    expect(snap.scopeFilter).toBe('work');
+    expect(snap.memories.map((m) => m.content)).toEqual(['work fact']);
+  });
 });

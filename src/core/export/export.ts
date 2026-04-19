@@ -1,4 +1,5 @@
 import type { DarkContextDb } from '../store/db.js';
+import { ValidationError } from '../errors.js';
 
 /**
  * A canonical, ID-free snapshot of a DarkContext store.
@@ -93,29 +94,54 @@ export interface ExportOptions {
  * user actually hits a store big enough to OOM — the hybrid hot paths
  * already assume the whole memories/documents table fits for reindex, so
  * this matches the existing scale assumption.
+ *
+ * The entire collection runs inside a single read transaction so
+ * concurrent writes can't produce an internally inconsistent snapshot
+ * (e.g., a scope listed in `scopes` but no memory referencing it
+ * anymore, or vice versa). SQLite's default isolation inside a BEGIN
+ * block gives a point-in-time view across multiple prepared statements.
  */
 export function exportSnapshot(db: DarkContextDb, opts: ExportOptions = {}): ExportSnapshot {
-  const scopeFilter = opts.scope ?? null;
+  // Empty/whitespace `scope` is almost always a caller bug — most often
+  // `--scope "$VAR"` with `$VAR` unset. Silently treating it as "no
+  // filter" would emit the whole store under a scope-filter claim and
+  // can leak data the caller meant to keep scoped. Reject explicitly.
+  let scopeFilter: string | null = null;
+  if (opts.scope !== undefined) {
+    const trimmed = opts.scope.trim();
+    if (trimmed === '') {
+      throw new ValidationError('scope', 'scope filter must be a non-empty string');
+    }
+    scopeFilter = trimmed;
+  }
+
   const schemaVersionRow = db.raw
     .prepare(`SELECT value FROM meta WHERE key = 'schema_version'`)
     .get() as { value: string } | undefined;
   const schemaVersion = schemaVersionRow ? Number(schemaVersionRow.value) : 0;
+
+  // `transaction(fn)` returns a wrapper; calling it runs fn inside a
+  // SQLite transaction. For a pure-read block, this pins the snapshot
+  // so every collector sees the same underlying rows.
+  const collect = db.raw.transaction(() => ({
+    scopes: collectScopes(db, scopeFilter),
+    memories: collectMemories(db, scopeFilter),
+    documents: collectDocuments(db, scopeFilter),
+    conversations: collectConversations(db, scopeFilter),
+    workspaces: collectWorkspaces(db, scopeFilter),
+  }));
 
   return {
     version: EXPORT_VERSION,
     exportedAt: Date.now(),
     schemaVersion,
     scopeFilter,
-    scopes: collectScopes(db, scopeFilter),
-    memories: collectMemories(db, scopeFilter),
-    documents: collectDocuments(db, scopeFilter),
-    conversations: collectConversations(db, scopeFilter),
-    workspaces: collectWorkspaces(db, scopeFilter),
+    ...collect(),
   };
 }
 
 function collectScopes(db: DarkContextDb, scope: string | null): ExportScope[] {
-  const rows = scope
+  const rows = scope !== null
     ? (db.raw
         .prepare('SELECT name, description FROM scopes WHERE name = ? ORDER BY name')
         .all(scope) as ExportScope[])
@@ -141,10 +167,10 @@ function collectMemories(db: DarkContextDb, scope: string | null): ExportMemory[
            m.created_at, m.updated_at
     FROM memories m
     LEFT JOIN scopes s ON s.id = m.scope_id
-    ${scope ? 'WHERE s.name = ?' : ''}
+    ${scope !== null ? 'WHERE s.name = ?' : ''}
     ORDER BY m.created_at, m.id
   `;
-  const rows = (scope ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as MemRow[];
+  const rows = (scope !== null ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as MemRow[];
   return rows.map((r) => ({
     content: r.content,
     kind: r.kind,
@@ -170,10 +196,10 @@ function collectDocuments(db: DarkContextDb, scope: string | null): ExportDocume
     SELECT d.id, d.title, d.source_uri, d.mime, s.name AS scope_name, d.ingested_at
     FROM documents d
     LEFT JOIN scopes s ON s.id = d.scope_id
-    ${scope ? 'WHERE s.name = ?' : ''}
+    ${scope !== null ? 'WHERE s.name = ?' : ''}
     ORDER BY d.ingested_at, d.id
   `;
-  const rows = (scope ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as DocRow[];
+  const rows = (scope !== null ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as DocRow[];
   const chunkStmt = db.raw.prepare(
     'SELECT chunk_idx, content FROM document_chunks WHERE document_id = ? ORDER BY chunk_idx'
   );
@@ -204,10 +230,10 @@ function collectConversations(db: DarkContextDb, scope: string | null): ExportCo
     SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name
     FROM conversations c
     LEFT JOIN scopes s ON s.id = c.scope_id
-    ${scope ? 'WHERE s.name = ?' : ''}
+    ${scope !== null ? 'WHERE s.name = ?' : ''}
     ORDER BY c.started_at, c.id
   `;
-  const rows = (scope ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as ConvRow[];
+  const rows = (scope !== null ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as ConvRow[];
   const msgStmt = db.raw.prepare(
     'SELECT role, content, ts FROM messages WHERE conversation_id = ? ORDER BY ts, id'
   );
@@ -234,10 +260,10 @@ function collectWorkspaces(db: DarkContextDb, scope: string | null): ExportWorks
     SELECT w.id, w.name, w.is_active, s.name AS scope_name, w.created_at
     FROM workspaces w
     LEFT JOIN scopes s ON s.id = w.scope_id
-    ${scope ? 'WHERE s.name = ?' : ''}
+    ${scope !== null ? 'WHERE s.name = ?' : ''}
     ORDER BY w.created_at, w.id
   `;
-  const rows = (scope ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as WsRow[];
+  const rows = (scope !== null ? db.raw.prepare(sql).all(scope) : db.raw.prepare(sql).all()) as WsRow[];
   const itemStmt = db.raw.prepare(
     'SELECT kind, content, state, updated_at FROM workspace_items WHERE workspace_id = ? ORDER BY updated_at, id'
   );
