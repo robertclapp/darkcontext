@@ -28,6 +28,7 @@ describe('MCP tool registry (tools-as-data)', () => {
       'remember',
       'search_documents',
       'search_history',
+      'summarize',
     ]);
   });
 
@@ -52,6 +53,7 @@ describe('MCP tool registry (tools-as-data)', () => {
         documents: fx.documents,
         workspaces: fx.workspaces,
         conversations: fx.conversations,
+        summarize: fx.summarize,
       }
     );
     const remember = ALL_MCP_TOOLS.find((t) => t.name === 'remember')!;

@@ -50,6 +50,7 @@ export async function startStdioServer(opts: ServeOptions = {}): Promise<Started
       documents: ctx.documents,
       workspaces: ctx.workspaces,
       conversations: ctx.conversations,
+      summarize: ctx.summarize,
     });
     const auditor = ctx.newAuditLog(callerTool);
     server = buildServer(filter, auditor);

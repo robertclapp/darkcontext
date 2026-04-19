@@ -16,6 +16,7 @@ import type {
   HistoryHit,
   HistorySearchOptions,
 } from '../core/conversations/index.js';
+import type { Summarize, SummarizeOptions, SummarizeResult } from '../core/summarize/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
 import { ScopeDeniedError } from '../core/errors.js';
 import { RECALL_OVERFETCH_RATIO } from '../core/constants.js';
@@ -47,6 +48,7 @@ export interface FilterDeps {
   documents: Documents;
   workspaces: Workspaces;
   conversations: Conversations;
+  summarize: Summarize;
 }
 
 export class ScopeFilter {
@@ -54,12 +56,14 @@ export class ScopeFilter {
   private readonly documents: Documents;
   private readonly workspaces: Workspaces;
   private readonly conversations: Conversations;
+  private readonly summarize: Summarize;
 
   constructor(private readonly tool: ToolWithGrants, deps: FilterDeps) {
     this.memories = deps.memories;
     this.documents = deps.documents;
     this.workspaces = deps.workspaces;
     this.conversations = deps.conversations;
+    this.summarize = deps.summarize;
   }
 
   // ---------- caller identity ----------
@@ -159,6 +163,34 @@ export class ScopeFilter {
       (h) => h.scope,
       opts.limit ?? 10
     );
+  }
+
+  /**
+   * Summarize history through the configured LLM. The retrieval step
+   * goes through `Summarize`, but we enforce the same scope rules here:
+   *   - explicit scope must be readable (else `ScopeDeniedError`)
+   *   - omitted scope is REQUIRED for summarize, since the underlying
+   *     `Summarize.run` doesn't apply per-scope filtering on its own —
+   *     callers must name the scope to summarize. This is more
+   *     restrictive than `searchHistory`, deliberately: pulling
+   *     unscoped history through an LLM would mix scopes in the output
+   *     in a way the user can't easily un-mix.
+   *   - `save: true` additionally requires write access on the target
+   *     scope, since the summary persists as a memory.
+   */
+  async summarizeHistoryViaLLM(opts: SummarizeOptions): Promise<SummarizeResult> {
+    if (!opts.scope) {
+      throw new ScopeDeniedError(
+        `summarize requires an explicit scope (caller '${this.tool.name}')`,
+        'read',
+        '(unscoped)'
+      );
+    }
+    this.requireReadableScope(opts.scope);
+    if (opts.save) {
+      this.requireWritableScope(opts.scope);
+    }
+    return this.summarize.run(opts);
   }
 
   // ---------- workspaces ----------

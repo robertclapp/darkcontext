@@ -9,6 +9,7 @@ import { runRecall } from '../../src/cli/commands/recall.js';
 import { runForget } from '../../src/cli/commands/forget.js';
 import { runList } from '../../src/cli/commands/list.js';
 import { runReindex } from '../../src/cli/commands/reindex.js';
+import { runSummarize } from '../../src/cli/commands/summarize.js';
 
 /**
  * CLI actions are pure functions. Each takes an output writer so tests can
@@ -134,5 +135,52 @@ describe('CLI actions (direct invocation)', () => {
     );
     // Shape: `#<id> [<scope>] <title> — <n> chunks`
     expect(cap.lines[0]).toMatch(/^#\d+ \[default\] ok\.txt — \d+ chunks$/);
+  });
+
+  it('runSummarize prints a header line then the LLM summary body', async () => {
+    // Seed history through a direct AppContext so we exercise the same path
+    // the user would: import → summarize.
+    const { AppContext } = await import('../../src/core/context.js');
+    const ctx = AppContext.open({ dbPath, embeddings: 'stub' });
+    try {
+      await ctx.conversations.ingest('chatgpt', [
+        {
+          externalId: 'c1',
+          title: 'chat',
+          startedAt: 1_700_000_000_000,
+          messages: [
+            { role: 'user', content: 'how do I descale espresso every 60 shots?', ts: 1_700_000_000_000 },
+          ],
+        },
+      ], { scope: 'home' });
+    } finally {
+      ctx.close();
+    }
+
+    const cap = capture();
+    await runSummarize('espresso descaling', { db: dbPath, scope: 'home' }, cap.write);
+    expect(cap.lines[0]).toMatch(/^topic: espresso descaling \(scope=home, source=-, sources=\d+, provider=stub\)$/);
+    expect(cap.lines[1]!.startsWith('summary:')).toBe(true);
+  });
+
+  it('runSummarize --save reports the persisted memory id', async () => {
+    const { AppContext } = await import('../../src/core/context.js');
+    const ctx = AppContext.open({ dbPath, embeddings: 'stub' });
+    try {
+      await ctx.conversations.ingest('chatgpt', [
+        {
+          externalId: 'c2',
+          title: 'chat',
+          startedAt: 1_700_000_000_000,
+          messages: [{ role: 'user', content: 'tennis grip notes', ts: 1_700_000_000_000 }],
+        },
+      ], { scope: 'home' });
+    } finally {
+      ctx.close();
+    }
+
+    const cap = capture();
+    await runSummarize('tennis', { db: dbPath, scope: 'home', save: true }, cap.write);
+    expect(cap.lines.at(-1)).toMatch(/^saved as memory #\d+$/);
   });
 });

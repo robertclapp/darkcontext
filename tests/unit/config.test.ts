@@ -47,4 +47,16 @@ describe('loadConfig', () => {
   it('rejects an unknown provider kind with ConfigError', () => {
     expect(() => loadConfig({}, { DARKCONTEXT_EMBEDDINGS: 'mystery-engine' })).toThrow(ConfigError);
   });
+
+  it('defaults llm to stub + llama3.2 and reads DARKCONTEXT_LLM / DARKCONTEXT_LLM_MODEL', () => {
+    const def = loadConfig({}, {});
+    expect(def.llm).toEqual({ kind: 'stub', model: 'llama3.2' });
+
+    const ollama = loadConfig({}, { DARKCONTEXT_LLM: 'ollama', DARKCONTEXT_LLM_MODEL: 'qwen2.5' });
+    expect(ollama.llm).toEqual({ kind: 'ollama', model: 'qwen2.5' });
+  });
+
+  it('rejects an unknown DARKCONTEXT_LLM provider with ConfigError', () => {
+    expect(() => loadConfig({}, { DARKCONTEXT_LLM: 'magic' })).toThrow(ConfigError);
+  });
 });

@@ -48,7 +48,7 @@ describe('MCP integration', () => {
   afterEach(() => fx.cleanup());
 
   it('advertises all M2+M3 tools', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(filter);
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -61,12 +61,56 @@ describe('MCP integration', () => {
       'remember',
       'search_documents',
       'search_history',
+      'summarize',
     ]);
     await client.close();
   });
 
+  it('summarize returns text content + structured metadata for a readable scope', async () => {
+    await fx.conversations.ingest('chatgpt', [
+      {
+        externalId: 'c',
+        title: 'chat',
+        startedAt: 1_700_000_000_000,
+        messages: [{ role: 'user', content: 'how to descale espresso every 60 shots', ts: 1_700_000_000_000 }],
+      },
+    ], { scope: 'home' });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'home', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+    const client = await connectPair(filter);
+
+    const res = await client.callTool({
+      name: 'summarize',
+      arguments: { topic: 'espresso descaling', scope: 'home' },
+    });
+    expect(res.isError).toBeFalsy();
+    const struct = res.structuredContent as {
+      sourceCount: number;
+      provider: string;
+      scope: string;
+      savedMemoryId: number | null;
+    };
+    expect(struct.scope).toBe('home');
+    expect(struct.provider).toBe('stub');
+    expect(struct.sourceCount).toBeGreaterThan(0);
+    expect(struct.savedMemoryId).toBeNull();
+    await client.close();
+  });
+
+  it('summarize without an explicit scope is denied (cross-scope mixing prevented)', async () => {
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'home', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+    const client = await connectPair(filter);
+    // The Zod schema marks `scope` as required; the SDK rejects the call
+    // server-side and returns an isError tool result rather than throwing
+    // a protocol error. That's the same protection that prevents implicit
+    // cross-scope mixing — the client cannot reach the LLM path without
+    // naming a scope.
+    const res = await client.callTool({ name: 'summarize', arguments: { topic: 'x' } as never });
+    expect(res.isError).toBe(true);
+    await client.close();
+  });
+
   it('remember → recall round-trip through MCP', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(filter);
 
     const remembered = await client.callTool({
@@ -87,7 +131,7 @@ describe('MCP integration', () => {
   });
 
   it('scope denial surfaces as a tool error (not a protocol error)', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(filter);
 
     const res = await client.callTool({
@@ -107,7 +151,7 @@ describe('MCP integration', () => {
     await fx.memories.remember({ content: 'alice-secret', scope: 'alice' });
     await fx.memories.remember({ content: 'bob-secret', scope: 'bob' });
 
-    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(bobOnly);
 
     const res = await client.callTool({ name: 'recall', arguments: { query: 'secret', limit: 10 } });
@@ -119,7 +163,7 @@ describe('MCP integration', () => {
 
   it('every tool call writes an audit entry with redacted content', async () => {
     const recorded: RecordedAudit[] = [];
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(filter, recorded);
 
     await client.callTool({ name: 'remember', arguments: { content: 'a private memory body that should not leak' } });
@@ -139,7 +183,7 @@ describe('MCP integration', () => {
 
   it('forget silently no-ops across scope boundaries (no existence leak)', async () => {
     const m = await fx.memories.remember({ content: 'protected', scope: 'alice' });
-    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const bobOnly = new ScopeFilter(fakeTool('bob', [{ scope: 'bob', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(bobOnly);
 
     const res = await client.callTool({ name: 'forget', arguments: { id: m.id } });
