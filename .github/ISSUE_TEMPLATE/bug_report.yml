@@ -1,0 +1,101 @@
+name: Bug report
+description: Report a reproducible bug in DarkContext.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. For **security** issues
+        (cross-scope leakage, auth bypass, token handling) please do NOT open
+        a public issue — see
+        [SECURITY.md](https://github.com/robertclapp/darkcontext/blob/main/SECURITY.md).
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal commands / config that reproduce the issue.
+      placeholder: |
+        1. dcx init
+        2. dcx remember "foo" --scope personal
+        3. dcx recall "foo"
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include stack traces or error output verbatim.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DarkContext version / commit
+      description: Output of `dcx --version` or the commit SHA you're running.
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - stdio
+        - HTTP
+        - CLI only
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: embeddings
+    attributes:
+      label: Embedding provider
+      options:
+        - stub
+        - ollama
+        - onnx
+        - not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`dcx doctor` output"
+      description: Redact any tokens before pasting.
+      render: shell
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
