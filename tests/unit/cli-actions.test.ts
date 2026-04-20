@@ -9,6 +9,7 @@ import { runRecall } from '../../src/cli/commands/recall.js';
 import { runForget } from '../../src/cli/commands/forget.js';
 import { runList } from '../../src/cli/commands/list.js';
 import { runReindex } from '../../src/cli/commands/reindex.js';
+import { runExport } from '../../src/cli/commands/export.js';
 
 /**
  * CLI actions are pure functions. Each takes an output writer so tests can
@@ -134,5 +135,23 @@ describe('CLI actions (direct invocation)', () => {
     );
     // Shape: `#<id> [<scope>] <title> — <n> chunks`
     expect(cap.lines[0]).toMatch(/^#\d+ \[default\] ok\.txt — \d+ chunks$/);
+  });
+
+  it('runExport writes a snapshot file and prints a summary', async () => {
+    const { readFileSync } = await import('node:fs');
+    await runRemember('fact', { db: dbPath, kind: 'fact' });
+    const out = join(dir, 'snap.json');
+    const cap = capture();
+    await runExport({ db: dbPath, out, pretty: true }, cap.write);
+    expect(cap.lines[0]).toMatch(/^export ok: .+snap\.json \(memories=1, documents=0/);
+    const parsed = JSON.parse(readFileSync(out, 'utf8'));
+    expect(parsed.memories).toHaveLength(1);
+    expect(parsed.memories[0].content).toBe('fact');
+  });
+
+  it('runExport rejects --scope "" / --out "" rather than silently defaulting', async () => {
+    await runRemember('leak-me-please', { db: dbPath, kind: 'fact', scope: 'secret' });
+    await expect(runExport({ db: dbPath, scope: '' }, () => undefined)).rejects.toThrow(/scope/);
+    await expect(runExport({ db: dbPath, out: '' }, () => undefined)).rejects.toThrow(/out/);
   });
 });
