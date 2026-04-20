@@ -9,6 +9,7 @@ import { runRecall } from '../../src/cli/commands/recall.js';
 import { runForget } from '../../src/cli/commands/forget.js';
 import { runList } from '../../src/cli/commands/list.js';
 import { runReindex } from '../../src/cli/commands/reindex.js';
+import { runPush, runPull } from '../../src/cli/commands/sync.js';
 
 /**
  * CLI actions are pure functions. Each takes an output writer so tests can
@@ -134,5 +135,37 @@ describe('CLI actions (direct invocation)', () => {
     );
     // Shape: `#<id> [<scope>] <title> — <n> chunks`
     expect(cap.lines[0]).toMatch(/^#\d+ \[default\] ok\.txt — \d+ chunks$/);
+  });
+
+  it('runPush -> runPull round-trips through a remote path', async () => {
+    await runRemember('round trip me', { db: dbPath, kind: 'fact' }, () => undefined);
+    const remote = join(dir, 'remote', 'store.db');
+    const cap = capture();
+    await runPush(remote, { db: dbPath }, cap.write);
+    expect(cap.lines[0]).toMatch(/^pushed \d+ bytes -> .+remote\/store\.db$/);
+
+    // Pull into a fresh local path, verify content.
+    const restored = join(dir, 'restored.db');
+    const cap2 = capture();
+    await runPull(remote, { db: restored }, cap2.write);
+    expect(cap2.lines[0]).toMatch(/^pulled \d+ bytes <- .+remote\/store\.db -> .+restored\.db$/);
+
+    const { AppContext } = await import('../../src/core/context.js');
+    const ctx = AppContext.open({ dbPath: restored, embeddings: 'stub' });
+    try {
+      const list = ctx.memories.list();
+      expect(list.some((m) => m.content === 'round trip me')).toBe(true);
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it('runPull refuses to overwrite an existing local store without --yes', async () => {
+    // Seed the local store so push() has something to copy.
+    await runRemember('seed', { db: dbPath, kind: 'fact' }, () => undefined);
+    const remote = join(dir, 'remote', 'store.db');
+    await runPush(remote, { db: dbPath }, () => undefined);
+    // dbPath already exists; pull without --yes must fail.
+    await expect(runPull(remote, { db: dbPath }, () => undefined)).rejects.toThrow(/--yes/);
   });
 });
