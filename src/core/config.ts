@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { ConfigError } from './errors.js';
 import type { ProviderKind } from './embeddings/index.js';
+import type { LLMProviderKind } from './llm/index.js';
 
 /**
  * Canonical resolver for DarkContext configuration.
@@ -30,6 +31,8 @@ export interface ConfigInit {
   token?: string;
   /** SQLCipher key. Default: $DARKCONTEXT_ENCRYPTION_KEY. */
   encryptionKey?: string;
+  /** Generative LLM provider for `summarize` and similar features. */
+  llm?: { kind?: LLMProviderKind; model?: string };
   ollama?: { url?: string; model?: string };
   onnx?: { model?: string };
 }
@@ -40,17 +43,29 @@ export interface Config {
   readonly embeddings: ProviderKind;
   readonly token: string | undefined;
   readonly encryptionKey: string | undefined;
+  readonly llm: { kind: LLMProviderKind; model: string };
   readonly ollama: { url: string; model: string };
   readonly onnx: { model: string };
 }
 
 const PROVIDER_KINDS: readonly ProviderKind[] = ['stub', 'ollama', 'onnx'];
+const LLM_PROVIDER_KINDS: readonly LLMProviderKind[] = ['stub', 'ollama'];
 
 function parseProviderKind(raw: string | undefined, fallback: ProviderKind = 'stub'): ProviderKind {
   if (!raw) return fallback;
   const v = raw.toLowerCase();
   if ((PROVIDER_KINDS as readonly string[]).includes(v)) return v as ProviderKind;
   throw new ConfigError(`DARKCONTEXT_EMBEDDINGS: unknown provider '${raw}' (expected stub | ollama | onnx)`);
+}
+
+function parseLLMProviderKind(
+  raw: string | undefined,
+  fallback: LLMProviderKind = 'stub'
+): LLMProviderKind {
+  if (!raw) return fallback;
+  const v = raw.toLowerCase();
+  if ((LLM_PROVIDER_KINDS as readonly string[]).includes(v)) return v as LLMProviderKind;
+  throw new ConfigError(`DARKCONTEXT_LLM: unknown provider '${raw}' (expected stub | ollama)`);
 }
 
 /** Build a `Config` from process.env plus optional overrides (overrides win). */
@@ -61,12 +76,15 @@ export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = 
   // relocate the store without setting a full home directory.
   const dbPath = overrides.dbPath ?? env.DARKCONTEXT_DB_PATH ?? join(home, 'store.db');
   const embeddings = overrides.embeddings ?? parseProviderKind(env.DARKCONTEXT_EMBEDDINGS);
+  const llmKind = overrides.llm?.kind ?? parseLLMProviderKind(env.DARKCONTEXT_LLM);
+  const llmModel = overrides.llm?.model ?? env.DARKCONTEXT_LLM_MODEL ?? 'llama3.2';
   return {
     home,
     dbPath,
     embeddings,
     token: overrides.token ?? env.DARKCONTEXT_TOKEN,
     encryptionKey: overrides.encryptionKey ?? env.DARKCONTEXT_ENCRYPTION_KEY,
+    llm: { kind: llmKind, model: llmModel },
     ollama: {
       url: (overrides.ollama?.url ?? env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/$/, ''),
       model: overrides.ollama?.model ?? env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text',

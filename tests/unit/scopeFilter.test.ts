@@ -21,7 +21,7 @@ describe('ScopeFilter — the security boundary', () => {
 
   describe('remember', () => {
     it('writes to the scope specified when the tool has write access', async () => {
-      const filter = new ScopeFilter(fakeTool('work-tool', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('work-tool', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const m = await filter.remember({ content: 'Q2 OKRs', scope: 'work' });
       expect(m.scope).toBe('work');
     });
@@ -32,24 +32,24 @@ describe('ScopeFilter — the security boundary', () => {
           { scope: 'personal', r: true, w: true },
           { scope: 'work', r: true, w: true },
         ]),
-        { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations }
+        { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize }
       );
       const m = await filter.remember({ content: 'no scope given' });
       expect(m.scope).toBe('personal');
     });
 
     it('rejects writing to an unreadable scope', async () => {
-      const filter = new ScopeFilter(fakeTool('ro', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('ro', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       await expect(filter.remember({ content: 'nope', scope: 'shared' })).rejects.toBeInstanceOf(ScopeDeniedError);
     });
 
     it('rejects writing to a scope the tool was not granted at all', async () => {
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'a', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'a', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       await expect(filter.remember({ content: 'x', scope: 'b' })).rejects.toBeInstanceOf(ScopeDeniedError);
     });
 
     it('rejects writing when the tool has zero writable scopes', async () => {
-      const filter = new ScopeFilter(fakeTool('reader', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('reader', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       await expect(filter.remember({ content: 'x' })).rejects.toBeInstanceOf(ScopeDeniedError);
     });
   });
@@ -59,7 +59,7 @@ describe('ScopeFilter — the security boundary', () => {
       await fx.memories.remember({ content: 'personal secret', scope: 'personal' });
       await fx.memories.remember({ content: 'work policy', scope: 'work' });
 
-      const filter = new ScopeFilter(fakeTool('work-only', [{ scope: 'work', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('work-only', [{ scope: 'work', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const hits = await filter.recall('secret policy');
       const scopes = new Set(hits.map((h) => h.memory.scope));
       expect(scopes).not.toContain('personal');
@@ -68,12 +68,12 @@ describe('ScopeFilter — the security boundary', () => {
 
     it('returns empty when the tool has no readable scopes', async () => {
       await fx.memories.remember({ content: 'anything', scope: 'work' });
-      const filter = new ScopeFilter(fakeTool('blind', [{ scope: 'work', r: false, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('blind', [{ scope: 'work', r: false, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(await filter.recall('anything')).toEqual([]);
     });
 
     it('rejects an explicit scope outside the tool grants', async () => {
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       await expect(filter.recall('q', { scope: 'personal' })).rejects.toBeInstanceOf(ScopeDeniedError);
     });
 
@@ -85,7 +85,7 @@ describe('ScopeFilter — the security boundary', () => {
           { scope: 'work', r: true, w: true },
           { scope: 'personal', r: true, w: true },
         ]),
-        { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations }
+        { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize }
       );
       const hits = await filter.recall('thing', { scope: 'work' });
       expect(hits.every((h) => h.memory.scope === 'work')).toBe(true);
@@ -95,26 +95,26 @@ describe('ScopeFilter — the security boundary', () => {
   describe('forget', () => {
     it('deletes a memory in a writable scope', async () => {
       const m = await fx.memories.remember({ content: 'kill me', scope: 'work' });
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(filter.forget(m.id)).toBe(true);
     });
 
     it('silently refuses to delete memories outside writable scopes (does not leak existence)', async () => {
       const m = await fx.memories.remember({ content: 'protected', scope: 'personal' });
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(filter.forget(m.id)).toBe(false);
       // The memory must still exist.
       expect(fx.memories.getById(m.id).content).toBe('protected');
     });
 
     it('returns false for non-existent ids without throwing', async () => {
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(filter.forget(99999)).toBe(false);
     });
 
     it('refuses to delete when tool only has read access on the scope', async () => {
       const m = await fx.memories.remember({ content: 'ro', scope: 'shared' });
-      const filter = new ScopeFilter(fakeTool('reader', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('reader', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(filter.forget(m.id)).toBe(false);
       expect(fx.memories.getById(m.id).content).toBe('ro');
     });
@@ -122,7 +122,7 @@ describe('ScopeFilter — the security boundary', () => {
 
   describe('documents + workspaces (M3 additions)', () => {
     it('ingestDocument writes under the first writable scope when none given', async () => {
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const res = await filter.ingestDocument({ title: 'd', content: 'hello world' });
       expect(res.document.scope).toBe('work');
     });
@@ -130,7 +130,7 @@ describe('ScopeFilter — the security boundary', () => {
     it('searchDocuments filters chunks to readable scopes', async () => {
       await fx.documents.ingest({ title: 'w', content: 'work content here', scope: 'work' });
       await fx.documents.ingest({ title: 'p', content: 'personal content here', scope: 'personal' });
-      const filter = new ScopeFilter(fakeTool('work-only', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('work-only', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const hits = await filter.searchDocuments('content');
       expect(hits.every((h) => h.scope === 'work')).toBe(true);
     });
@@ -138,22 +138,22 @@ describe('ScopeFilter — the security boundary', () => {
     it('listWorkspaces returns only readable-scope workspaces', () => {
       fx.workspaces.create({ name: 'w1', scope: 'work' });
       fx.workspaces.create({ name: 'p1', scope: 'personal' });
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const ws = filter.listWorkspaces();
       expect(ws.map((w) => w.name)).toEqual(['w1']);
     });
 
     it('addToWorkspace rejects writing to a workspace in a non-writable scope', () => {
       const ws = fx.workspaces.create({ name: 'protected', scope: 'personal' });
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       expect(() => filter.addToWorkspace({ workspaceId: ws.id, kind: 'task', content: 'x' })).toThrow(ScopeDeniedError);
     });
   });
 
   describe('scope isolation across multiple tools', () => {
     it('two tools with disjoint scopes cannot see each others memories', async () => {
-      const alice = new ScopeFilter(fakeTool('alice', [{ scope: 'alice-scope', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
-      const bob = new ScopeFilter(fakeTool('bob', [{ scope: 'bob-scope', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const alice = new ScopeFilter(fakeTool('alice', [{ scope: 'alice-scope', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+      const bob = new ScopeFilter(fakeTool('bob', [{ scope: 'bob-scope', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
 
       await alice.remember({ content: 'alice-only secret', scope: 'alice-scope' });
       await bob.remember({ content: 'bob-only secret', scope: 'bob-scope' });
@@ -165,6 +165,44 @@ describe('ScopeFilter — the security boundary', () => {
       expect(bobHits.every((h) => h.memory.scope === 'bob-scope')).toBe(true);
       expect(aliceHits.some((h) => h.memory.content.includes('bob-only'))).toBe(false);
       expect(bobHits.some((h) => h.memory.content.includes('alice-only'))).toBe(false);
+    });
+  });
+
+  describe('summarizeHistoryViaLLM', () => {
+    it('rejects unscoped summarize with ScopeDeniedError (no implicit cross-scope mixing)', async () => {
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'home', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+      await expect(
+        filter.summarizeHistoryViaLLM({ topic: 'anything' })
+      ).rejects.toBeInstanceOf(ScopeDeniedError);
+    });
+
+    it('rejects an explicit unreadable scope', async () => {
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'home', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+      await expect(
+        filter.summarizeHistoryViaLLM({ topic: 'x', scope: 'work' })
+      ).rejects.toBeInstanceOf(ScopeDeniedError);
+    });
+
+    it('save:true requires write access on the target scope', async () => {
+      const filter = new ScopeFilter(fakeTool('reader', [{ scope: 'home', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+      await expect(
+        filter.summarizeHistoryViaLLM({ topic: 'x', scope: 'home', save: true })
+      ).rejects.toBeInstanceOf(ScopeDeniedError);
+    });
+
+    it('happy path returns the summary for a readable scope', async () => {
+      await fx.conversations.ingest('chatgpt', [
+        {
+          externalId: 'c',
+          title: 'chat',
+          startedAt: 1_700_000_000_000,
+          messages: [{ role: 'user', content: 'espresso descaling cadence', ts: 1_700_000_000_000 }],
+        },
+      ], { scope: 'home' });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'home', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
+      const result = await filter.summarizeHistoryViaLLM({ topic: 'espresso', scope: 'home' });
+      expect(result.summary.length).toBeGreaterThan(0);
+      expect(result.scope).toBe('home');
     });
   });
 });
