@@ -60,7 +60,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       conversations: ctx.conversations,
     });
     const auditor = ctx.newAuditLog(callerTool);
-    mcpServer = buildServer(filter, auditor);
+    mcpServer = buildServer(filter, auditor, ctx.config);
 
     transport = new StreamableHTTPServerTransport(
       // Stateless mode: the SDK signals this by omitting a generator function.

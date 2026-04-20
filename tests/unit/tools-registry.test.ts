@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ALL_MCP_TOOLS } from '../../src/mcp/tools/registry.js';
 import { ScopeFilter } from '../../src/mcp/scopeFilter.js';
 import type { ToolWithGrants } from '../../src/core/tools/index.js';
+import { loadConfig } from '../../src/core/config.js';
 import { makeFixture, type Fixture } from '../helpers/factory.js';
 
 function fakeTool(name: string, grants: Array<{ scope: string; r: boolean; w: boolean }>): ToolWithGrants {
@@ -57,7 +58,7 @@ describe('MCP tool registry (tools-as-data)', () => {
     const remember = ALL_MCP_TOOLS.find((t) => t.name === 'remember')!;
     const result = await remember.handler(
       { content: 'directly invoked' } as never,
-      { filter }
+      { filter, config: loadConfig() }
     );
     expect(result.isError).toBeFalsy();
     const struct = result.structuredContent as { id?: number } | undefined;

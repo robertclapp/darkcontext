@@ -5,9 +5,19 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
-import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME } from '../constants.js';
+import {
+  DEFAULT_DEDUP_DISTANCE,
+  DEFAULT_MEMORY_KIND,
+  DEFAULT_SCOPE_NAME,
+} from '../constants.js';
 
-import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
+import type {
+  Memory,
+  NewMemory,
+  RecallHit,
+  RecallOptions,
+  RememberOrMergeResult,
+} from './types.js';
 
 interface MemoryRow {
   id: number;
@@ -100,6 +110,47 @@ export class Memories {
     return tx(id) as boolean;
   }
 
+  /**
+   * Like `remember`, but first looks for a semantically near-duplicate in
+   * the same scope. If one is found (top-1 vector distance below
+   * `threshold`), that row's content is replaced with the new content,
+   * tags are unioned, and the optional `source` overwrites the existing
+   * value. No new row is inserted.
+   *
+   * Returns `{ memory, merged }` so callers can distinguish the two
+   * outcomes. Falls back to a plain insert when vector search is
+   * unavailable (no sqlite-vec, no embed dimension yet) — dedup is a
+   * best-effort quality-of-life feature, not a correctness invariant.
+   *
+   * Only considers candidates in the SAME scope as the incoming memory.
+   * Cross-scope merges would leak existence across scope boundaries,
+   * which the ScopeFilter contract forbids.
+   */
+  async rememberOrMerge(
+    input: NewMemory,
+    threshold: number = DEFAULT_DEDUP_DISTANCE
+  ): Promise<RememberOrMergeResult> {
+    if (!input.content.trim()) throw new ValidationError('content', 'must not be empty');
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      throw new ValidationError('threshold', `must be a non-negative number, got ${threshold}`);
+    }
+
+    const scopeName = input.scope ?? DEFAULT_SCOPE_NAME;
+    const candidate = await this.findDuplicate(input.content, scopeName, threshold);
+    if (candidate) {
+      const merged = this.mergeInto(candidate, input);
+      // Rewrite the vector for the updated content so recall returns the
+      // new phrasing. Triggers already rewrote the FTS row on UPDATE.
+      // sqlite-vec virtual tables don't UPSERT, so drop the old row
+      // before writing the new embedding.
+      this.vectors.deleteOne(merged.id);
+      await this.vectors.write([merged.id], [merged.content]);
+      return { memory: merged, merged: true };
+    }
+    const memory = await this.remember(input);
+    return { memory, merged: false };
+  }
+
   async recall(query: string, opts: RecallOptions = {}): Promise<RecallHit[]> {
     const limit = opts.limit ?? 10;
     if (this.db.hasVec && this.db.embedDim > 0) {
@@ -122,6 +173,77 @@ export class Memories {
       rows.map((r) => r.content)
     );
     return rows.length;
+  }
+
+  /**
+   * Look for a near-duplicate of `content` within `scopeName`. Returns
+   * the candidate memory when the top vector-match distance is below
+   * `threshold`, else null.
+   *
+   * Vector-only. If vectors are unavailable we deliberately return null
+   * rather than falling back to FTS/LIKE: keyword overlap is not a
+   * reliable duplicate signal ("I love coffee" and "I hate coffee" share
+   * every non-stop word), and a false-positive merge silently deletes
+   * the user's content.
+   */
+  private async findDuplicate(
+    content: string,
+    scopeName: string,
+    threshold: number
+  ): Promise<Memory | null> {
+    if (!this.db.hasVec || this.db.embedDim === 0) return null;
+    const [qv] = await this.embeddings.embed([content]);
+    if (!qv) return null;
+    const row = this.db.raw
+      .prepare(
+        `SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+                m.source, m.created_at, m.updated_at, v.distance AS distance
+         FROM memories_vec v
+         JOIN memories m ON m.id = v.rowid
+         LEFT JOIN scopes s ON s.id = m.scope_id
+         WHERE v.embedding MATCH ? AND k = 1 AND s.name = ?
+         ORDER BY v.distance
+         LIMIT 1`
+      )
+      .get(VectorIndex.queryBlob(qv), scopeName) as
+      | (MemoryRow & { distance: number })
+      | undefined;
+    // Strict `<`: threshold 0 disables merging entirely (no row qualifies),
+    // which is how callers signal "opt-out" without a separate flag. Real
+    // embedding providers produce distance > 0 even on identical strings
+    // due to float math, so 0.15 still catches them.
+    if (!row || row.distance >= threshold) return null;
+    return rowToMemory(row);
+  }
+
+  /**
+   * Replace `target`'s content with `input.content`, union tags, and
+   * overwrite `source` when the caller provided one. Writes the UPDATE
+   * and returns the fresh Memory shape. Does NOT touch the vector index
+   * — the caller is responsible for rewriting it after merge.
+   */
+  private mergeInto(target: Memory, input: NewMemory): Memory {
+    const tags = Array.from(new Set([...target.tags, ...(input.tags ?? [])]));
+    const source = input.source ?? target.source;
+    const kind = input.kind ?? target.kind;
+    const now = Date.now();
+    this.db.raw
+      .prepare(
+        `UPDATE memories
+         SET content = ?, tags_json = ?, source = ?, kind = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(input.content, JSON.stringify(tags), source, kind, now, target.id);
+    return {
+      id: target.id,
+      content: input.content,
+      kind,
+      tags,
+      scope: target.scope,
+      source,
+      createdAt: target.createdAt,
+      updatedAt: now,
+    };
   }
 
   private vectorRecall(qv: number[], limit: number, scope?: string): RecallHit[] {

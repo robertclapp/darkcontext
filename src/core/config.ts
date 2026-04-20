@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { ConfigError } from './errors.js';
 import type { ProviderKind } from './embeddings/index.js';
+import { DEFAULT_DEDUP_DISTANCE } from './constants.js';
 
 /**
  * Canonical resolver for DarkContext configuration.
@@ -30,6 +31,8 @@ export interface ConfigInit {
   token?: string;
   /** SQLCipher key. Default: $DARKCONTEXT_ENCRYPTION_KEY. */
   encryptionKey?: string;
+  /** Vector distance threshold for opt-in remember-dedup. Default: 0.15. */
+  dedupDistance?: number;
   ollama?: { url?: string; model?: string };
   onnx?: { model?: string };
 }
@@ -40,6 +43,7 @@ export interface Config {
   readonly embeddings: ProviderKind;
   readonly token: string | undefined;
   readonly encryptionKey: string | undefined;
+  readonly dedupDistance: number;
   readonly ollama: { url: string; model: string };
   readonly onnx: { model: string };
 }
@@ -53,6 +57,17 @@ function parseProviderKind(raw: string | undefined, fallback: ProviderKind = 'st
   throw new ConfigError(`DARKCONTEXT_EMBEDDINGS: unknown provider '${raw}' (expected stub | ollama | onnx)`);
 }
 
+function parseDedupDistance(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return DEFAULT_DEDUP_DISTANCE;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new ConfigError(
+      `DARKCONTEXT_DEDUP_DISTANCE: must be a non-negative number, got '${raw}'`
+    );
+  }
+  return n;
+}
+
 /** Build a `Config` from process.env plus optional overrides (overrides win). */
 export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = process.env): Config {
   const home = overrides.home ?? env.DARKCONTEXT_HOME ?? join(homedir(), '.darkcontext');
@@ -61,12 +76,15 @@ export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = 
   // relocate the store without setting a full home directory.
   const dbPath = overrides.dbPath ?? env.DARKCONTEXT_DB_PATH ?? join(home, 'store.db');
   const embeddings = overrides.embeddings ?? parseProviderKind(env.DARKCONTEXT_EMBEDDINGS);
+  const dedupDistance =
+    overrides.dedupDistance ?? parseDedupDistance(env.DARKCONTEXT_DEDUP_DISTANCE);
   return {
     home,
     dbPath,
     embeddings,
     token: overrides.token ?? env.DARKCONTEXT_TOKEN,
     encryptionKey: overrides.encryptionKey ?? env.DARKCONTEXT_ENCRYPTION_KEY,
+    dedupDistance,
     ollama: {
       url: (overrides.ollama?.url ?? env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/$/, ''),
       model: overrides.ollama?.model ?? env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text',
