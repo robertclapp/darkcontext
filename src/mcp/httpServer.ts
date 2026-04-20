@@ -6,7 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { AppContext, type ContextInit } from '../core/context.js';
 import { AuthError } from '../core/errors.js';
-import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT } from '../core/constants.js';
+import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, SCHEMA_VERSION, VERSION } from '../core/constants.js';
 import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
@@ -75,6 +75,31 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
     const expectedHash = hashToken(token);
     const boundTransport = transport;
     const httpServer = createServer(async (req, res) => {
+      // Unauthenticated health probe — operationally useful for uptime
+      // monitoring + load balancer readiness checks. Returns only public
+      // metadata (version + schema version + `ok: true`). No bearer
+      // required precisely BECAUSE it's safe to serve anonymously;
+      // anything private stays behind /mcp.
+      //
+      // Supports both GET (return JSON body) and HEAD (headers only);
+      // load balancers commonly probe with HEAD to avoid body transfer.
+      //
+      // Matches on the parsed pathname rather than the raw `req.url`,
+      // so `GET /healthz?ts=12345` (LB cache-busters) and `/healthz/`
+      // (proxy-rewritten paths) both route correctly.
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const pathname = parsePathname(req.url);
+        if (pathname === '/healthz' || pathname === '/healthz/') {
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          if (req.method === 'HEAD') {
+            res.end();
+          } else {
+            res.end(JSON.stringify({ ok: true, version: VERSION, schemaVersion: SCHEMA_VERSION }));
+          }
+          return;
+        }
+      }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);
       try {
         await boundTransport.handleRequest(req, res);
@@ -214,4 +239,19 @@ function unauthorized(res: ServerResponse): void {
   res.setHeader('www-authenticate', 'Bearer realm="darkcontext"');
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ error: 'unauthorized' }));
+}
+
+/**
+ * Extract the pathname from a Node `IncomingMessage.url`. We parse against
+ * a dummy origin because req.url is request-target form (path + query),
+ * not a full URL. Returns `''` for malformed input so the caller falls
+ * through to the normal request-handler path.
+ */
+function parsePathname(rawUrl: string | undefined): string {
+  if (!rawUrl) return '';
+  try {
+    return new URL(rawUrl, 'http://_').pathname;
+  } catch {
+    return '';
+  }
 }

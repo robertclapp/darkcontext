@@ -59,11 +59,11 @@ gets exactly the slice you grant it.
 | History         | Import ChatGPT, Claude, Gemini Takeout, or generic JSON |
 | Workspaces      | Track active project, goals, tasks, threads |
 | Access control  | Per-tool bearer tokens, sha256-hashed, constant-time compare |
-| Transports      | MCP over stdio **or** Streamable HTTP |
+| Transports      | MCP over stdio **or** Streamable HTTP (with `/healthz`) |
 | Embeddings      | Pluggable: stub (dev), Ollama, ONNX via `@xenova/transformers` |
 | Storage         | SQLite + `sqlite-vec` (vector) + FTS5 (lexical), optional SQLCipher |
 | Audit           | Every MCP call logged with redacted args and outcome |
-| CLI             | `dcx` for init, tool/scope admin, ingest, import, backup, audit |
+| CLI             | `dcx` for init, tool/scope admin, ingest, import, backup, audit, `show`, `vacuum`, `doctor`, `export` |
 | Evals           | Retrieval recall@k and adversarial scope-isolation suites |
 
 ## Quickstart
@@ -84,9 +84,10 @@ npm run build
 # Initialize the store at ~/.darkcontext/store.db
 node dist/cli/index.js init
 
-# Remember and recall (stub embeddings by default)
+# Remember + recall (stub embeddings by default)
 node dist/cli/index.js remember "Espresso machine descales every 60 shots" --tags coffee
 node dist/cli/index.js recall "how often do I descale"
+node dist/cli/index.js show 1          # inspect a single memory
 
 # Ingest a document
 node dist/cli/index.js ingest ./README.md --scope work
@@ -96,20 +97,27 @@ node dist/cli/index.js document search "quickstart" --scope work
 node dist/cli/index.js import chatgpt path/to/conversations.json --scope personal
 node dist/cli/index.js history search "espresso"
 
+# Maintenance
+node dist/cli/index.js doctor          # integrity check + row counts
+node dist/cli/index.js vacuum          # integrity_check → orphan cleanup → VACUUM
+node dist/cli/index.js backup /tmp/snap.db
+node dist/cli/index.js audit list --limit 10
+
 # Provision a tool + serve MCP
 node dist/cli/index.js tool add claude-desktop --scopes personal,work
 node dist/cli/index.js serve                     # stdio
-node dist/cli/index.js serve --http --port 4000  # HTTP + Bearer auth
+node dist/cli/index.js serve --http --port 4000  # HTTP + Bearer auth + /healthz
 ```
 
 ### Using Ollama for real semantic embeddings
 
+See [`examples/ollama-setup.md`](examples/ollama-setup.md) for the full
+walkthrough (install → pull `nomic-embed-text` → reindex).
+
+Summary:
+
 ```bash
 export DARKCONTEXT_EMBEDDINGS=ollama
-export OLLAMA_URL=http://localhost:11434
-export OLLAMA_EMBED_MODEL=nomic-embed-text
-
-# If you already have memories indexed with a different provider, rebuild:
 node dist/cli/index.js reindex --provider ollama
 ```
 
@@ -118,7 +126,8 @@ node dist/cli/index.js reindex --provider ollama
 ### Claude Desktop / Claude Code (stdio)
 
 `dcx tool add claude-desktop --scopes personal,work` prints a config snippet.
-Drop it into Claude Desktop's `claude_desktop_config.json`:
+Drop it into Claude Desktop's `claude_desktop_config.json`. A paste-ready
+template lives at [`examples/claude-desktop.json`](examples/claude-desktop.json):
 
 ```json
 {
@@ -140,8 +149,11 @@ DARKCONTEXT_TOKEN=dcx_... dcx serve --http --port 4000
 
 Clients POST JSON-RPC to `http://127.0.0.1:4000/mcp` with
 `Authorization: Bearer dcx_...` and
-`Accept: application/json, text/event-stream`. See
-[`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) for the full tool surface.
+`Accept: application/json, text/event-stream`.
+`GET /healthz` (no auth) returns `{ ok, version, schemaVersion }` for
+uptime monitoring. See [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) for the
+full tool surface; [`examples/curl-http-demo.sh`](examples/curl-http-demo.sh)
+drives the end-to-end flow with `curl + jq`.
 
 ## Configuration
 
@@ -163,13 +175,15 @@ Every setting has an env var; call `dcx doctor` to sanity-check them.
 ```bash
 npm run typecheck   # src + tests + evals
 npm run lint
-npm test            # unit + integration suites
+npm test            # full unit + integration suite
+npm run test:coverage
 npm run eval        # retrieval + scope-isolation evals
 npm run build
 ```
 
 Before opening a PR make sure `typecheck`, `lint`, `test`, and `build` are
-green — CI runs all four on every push.
+green. CI runs all four on both Node 20 and Node 22
+(see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## Project layout
 
@@ -190,13 +204,15 @@ src/
 │   ├── scopeFilter.ts   security boundary
 │   ├── server.ts httpServer.ts  transports
 │   └── tools/           one file per MCP tool + registry.ts
-├── cli/                 `dcx` command surface
+├── cli/
+│   ├── exit-codes.ts    shared sysexits mapper
+│   └── commands/        one file per CLI command
 └── index.ts             public API
 
+examples/                paste-ready client configs + demos
 evals/
 ├── retrieval/           recall@k across embedding providers
 └── scope-isolation/     adversarial cross-scope attacks
-
 tests/
 ├── unit/                domain + security + tooling suites
 └── integration/         MCP + HTTP + backup

@@ -96,6 +96,43 @@ describe('HTTP transport bearer auth', () => {
     ).rejects.toThrow(/does not match/);
   });
 
+  it('serves GET /healthz without auth and reports ok + version + schemaVersion', async () => {
+    // Explicitly NO Authorization header: /healthz must answer anonymously
+    // or it's useless for uptime monitoring / load balancer probes.
+    const res = await fetch(`${baseUrl}/healthz`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { ok: boolean; version: string; schemaVersion: number };
+    expect(body.ok).toBe(true);
+    expect(typeof body.version).toBe('string');
+    expect(body.schemaVersion).toBeGreaterThan(0);
+  });
+
+  it('supports HEAD /healthz (load balancers probe with HEAD to skip the body)', async () => {
+    const res = await fetch(`${baseUrl}/healthz`, { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    // HEAD responses must not carry a body.
+    const text = await res.text();
+    expect(text).toBe('');
+  });
+
+  it('/healthz matches regardless of query string or trailing slash', async () => {
+    // Load balancers commonly append cache-busting query params and some
+    // proxies rewrite paths to end in `/`. All three shapes must 200.
+    for (const url of [`${baseUrl}/healthz?ts=12345`, `${baseUrl}/healthz/`, `${baseUrl}/healthz?`]) {
+      const res = await fetch(url);
+      expect(res.status, `url=${url}`).toBe(200);
+    }
+  });
+
+  it('other unknown paths still require auth (healthz routing does not bypass /mcp)', async () => {
+    // Defensive: make sure the healthz early-return doesn't accidentally
+    // open up OTHER paths as unauthenticated.
+    const res = await fetch(`${baseUrl}/admin`);
+    expect(res.status).toBe(401);
+  });
+
   it('rejects cleanly when the bind port is already in use (does not crash the process)', async () => {
     // Start a second server on the same port as the first one. Previously
     // the listen() wrapper only resolved on success, so EADDRINUSE escaped

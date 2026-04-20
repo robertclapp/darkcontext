@@ -4,6 +4,11 @@
  * future reader knows whether a value is load-bearing or arbitrary.
  */
 
+/** Released binary version. Kept in lockstep with `package.json :: version`.
+ *  Surfaced by `commander.version()` and `/healthz` so a single bump covers
+ *  every user-visible place the version appears. */
+export const VERSION = '0.2.0';
+
 /** Schema version currently understood by this binary. Bump when you add a
  *  non-additive change to `schema.sql` so older dcx versions fail loudly. */
 export const SCHEMA_VERSION = 3;

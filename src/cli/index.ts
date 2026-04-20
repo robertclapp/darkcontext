@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 
+import { VERSION } from '../core/constants.js';
 import { exitCodeFor, formatError } from './exit-codes.js';
 
 import { registerInit } from './commands/init.js';
@@ -21,12 +22,14 @@ import { registerBackup } from './commands/backup.js';
 import { registerAuditCommands } from './commands/audit.js';
 import { registerReindex } from './commands/reindex.js';
 import { registerExport } from './commands/export.js';
+import { registerShow } from './commands/show.js';
+import { registerVacuum } from './commands/vacuum.js';
 
 const program = new Command();
 program
   .name('dcx')
   .description('DarkContext — bring-your-own-context layer for LLMs')
-  .version('0.1.0');
+  .version(VERSION);
 
 registerInit(program);
 registerRemember(program);
@@ -45,6 +48,8 @@ registerBackup(program);
 registerAuditCommands(program);
 registerReindex(program);
 registerExport(program);
+registerShow(program);
+registerVacuum(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {
