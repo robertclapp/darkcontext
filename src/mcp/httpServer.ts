@@ -11,6 +11,8 @@ import { hashToken } from '../core/tools/tokens.js';
 
 import { buildServer } from './server.js';
 import { ScopeFilter } from './scopeFilter.js';
+import { handleUiApi, isUiApiPath } from './ui/api.js';
+import { INDEX_HTML } from './ui/page.js';
 
 export interface HttpServeOptions extends ContextInit {
   port?: number;
@@ -74,7 +76,39 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
 
     const expectedHash = hashToken(token);
     const boundTransport = transport;
+    const boundFilter = filter;
     const httpServer = createServer(async (req, res) => {
+      // Path-based routing.
+      //   GET /ui              → static HTML (unauthenticated; the page
+      //                          itself ships no sensitive data and the
+      //                          JS prompts for the bearer at first use)
+      //   /ui/api/*            → JSON API gated by the same bearer
+      //   anything else        → MCP transport, also bearer-gated
+      const pathname = parsePathname(req.url);
+      if (req.method === 'GET' && pathname === '/ui') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        // No-cache so an upgraded `dcx` binary serves a fresh UI.
+        res.setHeader('cache-control', 'no-store');
+        res.end(INDEX_HTML);
+        return;
+      }
+      if (isUiApiPath(pathname)) {
+        if (!checkBearer(req, expectedHash)) return unauthorized(res);
+        try {
+          await handleUiApi(req, res, boundFilter);
+        } catch (err) {
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader('content-type', 'application/json');
+            console.error('[darkcontext ui] api failed:', err);
+            res.end(JSON.stringify({ error: 'internal server error' }));
+          } else {
+            console.error('[darkcontext ui] error after headers sent:', err);
+          }
+        }
+        return;
+      }
       if (!checkBearer(req, expectedHash)) return unauthorized(res);
       try {
         await boundTransport.handleRequest(req, res);
@@ -214,4 +248,12 @@ function unauthorized(res: ServerResponse): void {
   res.setHeader('www-authenticate', 'Bearer realm="darkcontext"');
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ error: 'unauthorized' }));
+}
+
+function parsePathname(rawUrl: string | undefined): string {
+  if (!rawUrl) return '/';
+  // Strip the query string ourselves rather than allocating a `new URL()`
+  // for every request — the dispatch loop runs per request.
+  const q = rawUrl.indexOf('?');
+  return q < 0 ? rawUrl : rawUrl.slice(0, q);
 }
