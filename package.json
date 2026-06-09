@@ -1,6 +1,6 @@
 {
   "name": "darkcontext",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bring-your-own-context layer for LLMs — self-hosted MCP server backed by SQLite + vector search.",
   "license": "MIT",
   "type": "module",
@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "src/core/store/schema.sql",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -20,6 +21,7 @@
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"evals/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.all.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "eval": "npm run eval:retrieval && npm run eval:security",
     "eval:retrieval": "tsx evals/retrieval/run.ts",
@@ -37,6 +39,7 @@
     "@types/node": "^20.14.10",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^2.0.5",
     "eslint": "^9.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4",

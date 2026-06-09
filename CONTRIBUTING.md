@@ -36,8 +36,8 @@ Node 20+ is required. No native toolchain is needed beyond what
 ```bash
 npm run typecheck   # src + tests + evals
 npm run lint
-npm test            # unit + integration
-npm run eval        # retrieval + scope-isolation evals
+npm test            # full unit + integration suite
+npm run eval        # retrieval + scope-isolation (adversarial)
 npm run build
 ```
 
