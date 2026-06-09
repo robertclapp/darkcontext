@@ -72,6 +72,38 @@ search + `VectorIndex`, new `ScopeFilter` methods (with tests), a new
   and call out follow-up work you're deferring.
 - Draft PRs are welcome for early feedback.
 
+## Releasing (maintainers)
+
+Releases are automated by `.github/workflows/release.yml`, triggered by
+a version tag. One-time setup: add an `NPM_TOKEN` repository secret
+(npm automation token with publish rights).
+
+1. Update `CHANGELOG.md` — add a `## [X.Y.Z] — YYYY-MM-DD` section.
+2. Bump the version in **both** places:
+   - `package.json :: version` (use `npm version X.Y.Z --no-git-tag-version`)
+   - `src/core/constants.ts :: VERSION`
+3. Land that as a PR; let CI go green. If you forgot either bump, the
+   `version-sync` test fails the PR here — before any tag exists — so a
+   mismatch never reaches the release workflow.
+4. Tag the merge commit and push the tag:
+
+   ```bash
+   git checkout main && git pull
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The workflow then: verifies the tag matches `package.json`, runs the
+full gate (typecheck, lint, test, eval — the package build itself runs
+via the `prepublishOnly` lifecycle hook at publish time, so the shipped
+`dist/` is the product of exactly one build), publishes to npm with
+provenance, and creates a GitHub Release with notes extracted from the
+matching `CHANGELOG.md` section. If any step fails, nothing is
+published.
+
+`prepublishOnly` also rebuilds `dist/` on any manual `npm publish`, so
+a stale local build can't ship by accident.
+
 ## Reporting bugs / proposing features
 
 Use the issue templates. For security-sensitive reports, see

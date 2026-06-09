@@ -4,18 +4,47 @@
   "description": "Bring-your-own-context layer for LLMs — self-hosted MCP server backed by SQLite + vector search.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robertclapp/darkcontext.git"
+  },
+  "bugs": "https://github.com/robertclapp/darkcontext/issues",
+  "homepage": "https://github.com/robertclapp/darkcontext#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "memory",
+    "context",
+    "sqlite",
+    "vector-search",
+    "embeddings",
+    "claude",
+    "self-hosted"
+  ],
   "bin": {
     "dcx": "dist/cli/index.js"
   },
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "files": [
     "dist",
-    "src/core/store/schema.sql",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/cli/index.ts",
     "dcx": "tsx src/cli/index.ts",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"evals/**/*.ts\"",
