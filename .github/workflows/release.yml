@@ -1,0 +1,113 @@
+name: Release
+
+# Publishes to npm and creates a GitHub Release when a version tag is pushed.
+# The full release runbook lives in CONTRIBUTING.md ("Releasing"); short form:
+#
+#   1. Bump package.json AND src/core/constants.ts VERSION in a PR
+#   2. After merge:  git checkout main && git pull
+#                    git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# One-time setup: add an `NPM_TOKEN` repository secret (npm automation token
+# with publish rights). Without it the publish step fails loudly — nothing
+# is half-released because publish is the last step after all verification.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # create the GitHub Release
+  id-token: write   # npm provenance attestation (links package to this build)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      # The tag is the release trigger, but package.json is what npm
+      # actually publishes. If they disagree (tagged v0.3.0 while
+      # package.json still says 0.2.0), fail before anything ships.
+      # The version-sync unit test already pins package.json to the
+      # VERSION constant, so this check transitively covers all three.
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      # Verification gate. Tags can point at ANY commit, so re-verify the
+      # exact tagged tree rather than trusting an earlier CI run. No
+      # explicit `npm run build` here: `prepublishOnly` rebuilds dist/
+      # immediately before the tarball is packed, so the published
+      # artifact is always the product of exactly one build — there's no
+      # gap where a gate-built dist could diverge from the published one.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # Pin the provider so the eval can never pick up a stray OLLAMA_URL /
+      # DARKCONTEXT_EMBEDDINGS from the runner environment and try to reach
+      # a server that isn't there.
+      - run: npm run eval
+        env:
+          DARKCONTEXT_EMBEDDINGS: stub
+
+      # Extract this version's section from CHANGELOG.md BEFORE publishing.
+      # awk prints from the matching "## [X.Y.Z]" heading until the next
+      # "## [" heading. The heading match uses index() (literal substring
+      # anchored at column 1), NOT a regex — version dots would otherwise
+      # be wildcards. A missing section fails the release here — before
+      # anything ships — rather than silently publishing with empty notes.
+      - name: Extract changelog section
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$TAG_VERSION]" '
+            index($0, heading) == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [$TAG_VERSION]' section. Add release notes before tagging."
+            exit 1
+          fi
+
+      # Skip publish when this exact version is already on the registry so
+      # a re-run after a transient failure (e.g. the GitHub Release step
+      # below failed) resumes instead of dying with EPUBLISHCONFLICT.
+      # `--access public` lives in package.json publishConfig — single
+      # source of truth, not repeated here.
+      - name: Publish to npm (with provenance)
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "darkcontext@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "darkcontext@$PKG_VERSION already on npm — skipping publish (resumed run)"
+          else
+            npm publish --provenance
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Idempotent: tolerate an existing release on re-runs.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists — skipping (resumed run)"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file /tmp/release-notes.md
+          fi
