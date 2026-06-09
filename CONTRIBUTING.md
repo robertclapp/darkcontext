@@ -94,10 +94,12 @@ a version tag. One-time setup: add an `NPM_TOKEN` repository secret
    ```
 
 The workflow then: verifies the tag matches `package.json`, runs the
-full gate (typecheck, lint, test, build, eval), publishes to npm with
+full gate (typecheck, lint, test, eval — the package build itself runs
+via the `prepublishOnly` lifecycle hook at publish time, so the shipped
+`dist/` is the product of exactly one build), publishes to npm with
 provenance, and creates a GitHub Release with notes extracted from the
 matching `CHANGELOG.md` section. If any step fails, nothing is
-published — publish is the last verification-gated step.
+published.
 
 `prepublishOnly` also rebuilds `dist/` on any manual `npm publish`, so
 a stale local build can't ship by accident.
