@@ -70,4 +70,74 @@ describe('Memories', () => {
     expect(hits.length).toBe(1);
     expect(hits[0]!.match).toBe('keyword');
   });
+
+  describe('rememberOrMerge', () => {
+    it('merges near-duplicate content into the existing row (same scope)', async () => {
+      const first = await memories.remember({ content: 'Espresso descaling every 60 shots' });
+      const res = await memories.rememberOrMerge({
+        content: 'Espresso descaling every 60 shots',
+        tags: ['coffee'],
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(first.id);
+      expect(res.memory.tags).toEqual(['coffee']);
+      expect(memories.list()).toHaveLength(1);
+    });
+
+    it('inserts a fresh row when no candidate is within the distance threshold', async () => {
+      await memories.remember({ content: 'Espresso descaling every 60 shots' });
+      const res = await memories.rememberOrMerge({
+        content: 'Completely unrelated tennis forehand tip',
+      });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('unions tags and keeps the newest content when merging', async () => {
+      const first = await memories.remember({
+        content: 'Descale every 60 shots',
+        tags: ['coffee'],
+      });
+      const res = await memories.rememberOrMerge({
+        content: 'Descale every 60 shots',
+        tags: ['maintenance'],
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(first.id);
+      expect(res.memory.tags.sort()).toEqual(['coffee', 'maintenance']);
+    });
+
+    it('does not merge across scope boundaries', async () => {
+      await memories.remember({ content: 'shared phrase', scope: 'work' });
+      const res = await memories.rememberOrMerge({
+        content: 'shared phrase',
+        scope: 'personal',
+      });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+      expect(memories.list({ scope: 'work' })).toHaveLength(1);
+      expect(memories.list({ scope: 'personal' })).toHaveLength(1);
+    });
+
+    it('falls back to a plain insert when vectors are unavailable', async () => {
+      await memories.remember({ content: 'existing fact' });
+      (db as { hasVec: boolean }).hasVec = false;
+      const res = await memories.rememberOrMerge({ content: 'existing fact' });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('respects the threshold: a tiny threshold disables merging', async () => {
+      await memories.remember({ content: 'repeat fact' });
+      const res = await memories.rememberOrMerge({ content: 'repeat fact' }, 0);
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('rejects a negative threshold', async () => {
+      await expect(
+        memories.rememberOrMerge({ content: 'x' }, -1)
+      ).rejects.toThrow(/non-negative/);
+    });
+  });
 });

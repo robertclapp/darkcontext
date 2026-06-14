@@ -4,6 +4,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { AppContext, type ContextInit } from '../core/context.js';
 import type { AuditSink } from '../core/audit/index.js';
+import type { Config } from '../core/config.js';
 
 import { resolveToolFromEnv } from './auth.js';
 import { ScopeFilter } from './scopeFilter.js';
@@ -23,12 +24,16 @@ export interface StartedServer {
  * Construct a fully wired MCP server for a given scope-filtered context.
  * Transport-agnostic: pair with stdio, HTTP, or InMemoryTransport.
  */
-export function buildServer(filter: ScopeFilter, auditor: AuditSink): McpServer {
+export function buildServer(
+  filter: ScopeFilter,
+  auditor: AuditSink,
+  config: Config
+): McpServer {
   const server = new McpServer(
     { name: 'darkcontext', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
-  registerAllMcpTools(server, filter, auditor);
+  registerAllMcpTools(server, filter, auditor, config);
   return server;
 }
 
@@ -52,7 +57,7 @@ export async function startStdioServer(opts: ServeOptions = {}): Promise<Started
       conversations: ctx.conversations,
     });
     const auditor = ctx.newAuditLog(callerTool);
-    server = buildServer(filter, auditor);
+    server = buildServer(filter, auditor, ctx.config);
 
     const transport: Transport = new StdioServerTransport();
     await server.connect(transport);
