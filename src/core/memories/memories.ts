@@ -8,6 +8,7 @@ import { normalizeScopeList } from '../store/scopeList.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import {
+  DEDUP_CANDIDATE_K,
   DEFAULT_DEDUP_DISTANCE,
   DEFAULT_MEMORY_KIND,
   DEFAULT_SCOPE_NAME,
@@ -143,10 +144,10 @@ export class Memories {
       const merged = this.mergeInto(candidate, input);
       // Rewrite the vector for the updated content so recall returns the
       // new phrasing. Triggers already rewrote the FTS row on UPDATE.
-      // sqlite-vec virtual tables don't UPSERT, so drop the old row
-      // before writing the new embedding.
-      this.vectors.deleteOne(merged.id);
-      await this.vectors.write([merged.id], [merged.content]);
+      // `replaceOne` embeds FIRST, then swaps inside one transaction — so a
+      // transient embedding failure leaves the original vector intact
+      // rather than deleting it and then failing to write the replacement.
+      await this.vectors.replaceOne(merged.id, merged.content);
       return { memory: merged, merged: true };
     }
     const memory = await this.remember(input);
@@ -234,6 +235,11 @@ export class Memories {
     if (!this.db.hasVec || this.db.embedDim === 0) return null;
     const [qv] = await this.embeddings.embed([content]);
     if (!qv) return null;
+    // Over-fetch K nearest neighbors, THEN keep only the closest one in the
+    // caller's scope. sqlite-vec applies `k` BEFORE the `s.name` filter, so
+    // binding `k = 1` would silently miss a real in-scope duplicate whenever
+    // a closer vector exists in another scope (same hazard RECALL_OVERFETCH
+    // works around). DEDUP_CANDIDATE_K is the overfetch budget.
     const row = this.db.raw
       .prepare(
         `SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
@@ -241,18 +247,22 @@ export class Memories {
          FROM memories_vec v
          JOIN memories m ON m.id = v.rowid
          LEFT JOIN scopes s ON s.id = m.scope_id
-         WHERE v.embedding MATCH ? AND k = 1 AND s.name = ?
+         WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
          ORDER BY v.distance
          LIMIT 1`
       )
-      .get(VectorIndex.queryBlob(qv), scopeName) as
+      .get(VectorIndex.queryBlob(qv), DEDUP_CANDIDATE_K, scopeName) as
       | (MemoryRow & { distance: number })
       | undefined;
     // Strict `<`: threshold 0 disables merging entirely (no row qualifies),
     // which is how callers signal "opt-out" without a separate flag. Real
     // embedding providers produce distance > 0 even on identical strings
-    // due to float math, so 0.15 still catches them.
-    if (!row || row.distance >= threshold) return null;
+    // due to float math, so 0.15 still catches them. Guard against a
+    // non-finite distance (NaN from a degenerate embedding) — `NaN >= t`
+    // is false, which would otherwise fall through to a destructive merge.
+    if (!row || !Number.isFinite(row.distance) || row.distance >= threshold) {
+      return null;
+    }
     return rowToMemory(row);
   }
 
@@ -261,23 +271,29 @@ export class Memories {
    * overwrite `source` when the caller provided one. Writes the UPDATE
    * and returns the fresh Memory shape. Does NOT touch the vector index
    * — the caller is responsible for rewriting it after merge.
+   *
+   * `kind` is deliberately PRESERVED from the target: dedup merges
+   * near-identical content, but the existing memory's category is not the
+   * incoming call's to change. The CLI/MCP `remember` path always supplies
+   * a `kind` (defaulting to 'fact'), so honoring `input.kind` here would
+   * silently recategorize an existing 'preference'/'event' memory into
+   * 'fact' on every dedup merge.
    */
   private mergeInto(target: Memory, input: NewMemory): Memory {
     const tags = Array.from(new Set([...target.tags, ...(input.tags ?? [])]));
     const source = input.source ?? target.source;
-    const kind = input.kind ?? target.kind;
     const now = Date.now();
     this.db.raw
       .prepare(
         `UPDATE memories
-         SET content = ?, tags_json = ?, source = ?, kind = ?, updated_at = ?
+         SET content = ?, tags_json = ?, source = ?, updated_at = ?
          WHERE id = ?`
       )
-      .run(input.content, JSON.stringify(tags), source, kind, now, target.id);
+      .run(input.content, JSON.stringify(tags), source, now, target.id);
     return {
       id: target.id,
       content: input.content,
-      kind,
+      kind: target.kind,
       tags,
       scope: target.scope,
       source,

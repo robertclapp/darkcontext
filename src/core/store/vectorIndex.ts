@@ -86,6 +86,45 @@ export class VectorIndex {
   }
 
   /**
+   * Atomically replace the vector for a single existing row. Embeds FIRST
+   * (outside the transaction, so a provider failure leaves the existing
+   * row's vector untouched), THEN deletes + re-inserts inside one
+   * transaction — sqlite-vec has no UPSERT. Net effect: either the new
+   * embedding is applied, or the old one survives. This is the safe
+   * counterpart to a bare `deleteOne()` + `write()`, which on a failed
+   * embed would leave the row with NO vector at all.
+   */
+  async replaceOne(id: number, text: string): Promise<void> {
+    if (!this.db.hasVec) return;
+    const vecs = await this.embeddings.embed([text]);
+    const vec = vecs[0];
+    if (!vec) return;
+
+    const dim = vec.length;
+    if (this.db.embedDim === 0) {
+      setEmbedDim(this.db.raw, dim);
+      this.db.embedDim = dim;
+      ensureVecTables(this.db.raw, dim);
+    } else if (dim !== this.db.embedDim) {
+      throw new ConfigError(
+        `embedding dim mismatch on ${this.tableName}: provider returned ${dim}, store is ${this.db.embedDim}. ` +
+          `Re-initialize the store or run \`dcx reindex\`.`
+      );
+    }
+
+    const blob = Buffer.from(new Float32Array(vec).buffer);
+    const del = this.db.raw.prepare(`DELETE FROM ${this.tableName} WHERE rowid = ?`);
+    const insert = this.db.raw.prepare(
+      `INSERT INTO ${this.tableName} (rowid, embedding) VALUES (?, ?)`
+    );
+    const tx = this.db.raw.transaction(() => {
+      del.run(BigInt(id));
+      insert.run(BigInt(id), blob);
+    });
+    tx();
+  }
+
+  /**
    * Drop all rows from this vector table. Public only so `reindex([], [])`
    * can delegate; external callers should use `reindex(ids, texts)` to get
    * atomic swap semantics rather than a bare truncate.
