@@ -68,6 +68,18 @@ function parseDedupDistance(raw: string | undefined): number {
   return n;
 }
 
+/** Validate a programmatic dedupDistance override against the same gate
+ *  as the env-derived value, so NaN/negative numbers fail fast at config
+ *  load rather than at the first remember-with-dedup call. */
+function validateDedupDistanceOverride(n: number): number {
+  if (!Number.isFinite(n) || n < 0) {
+    throw new ConfigError(
+      `overrides.dedupDistance: must be a non-negative number, got '${n}'`
+    );
+  }
+  return n;
+}
+
 /** Build a `Config` from process.env plus optional overrides (overrides win). */
 export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = process.env): Config {
   const home = overrides.home ?? env.DARKCONTEXT_HOME ?? join(homedir(), '.darkcontext');
@@ -76,8 +88,13 @@ export function loadConfig(overrides: ConfigInit = {}, env: NodeJS.ProcessEnv = 
   // relocate the store without setting a full home directory.
   const dbPath = overrides.dbPath ?? env.DARKCONTEXT_DB_PATH ?? join(home, 'store.db');
   const embeddings = overrides.embeddings ?? parseProviderKind(env.DARKCONTEXT_EMBEDDINGS);
+  // Validate `overrides.dedupDistance` through the same gate as the env
+  // value so a programmatic NaN/negative is rejected at config load,
+  // not on the first remember-with-dedup call.
   const dedupDistance =
-    overrides.dedupDistance ?? parseDedupDistance(env.DARKCONTEXT_DEDUP_DISTANCE);
+    overrides.dedupDistance !== undefined
+      ? validateDedupDistanceOverride(overrides.dedupDistance)
+      : parseDedupDistance(env.DARKCONTEXT_DEDUP_DISTANCE);
   return {
     home,
     dbPath,

@@ -103,17 +103,24 @@ export class ScopeFilter {
   }
 
   /**
-   * Dedup-aware remember. Resolves the writable scope first (so a caller
-   * without write access can't even probe for duplicates), then delegates
-   * to `Memories.rememberOrMerge`. `threshold` is the max vector distance
-   * at which a candidate is treated as a duplicate; pass the config
-   * default from the MCP layer.
+   * Dedup-aware remember. Requires BOTH read and write access on the
+   * resolved scope. The read requirement isn't bureaucracy: the merge
+   * outcome (and its returned id/kind/tags) reveals whether a near
+   * duplicate already lives in the scope, which is an existence/content
+   * oracle a write-only tool would otherwise use to probe content it
+   * cannot `recall`. When the caller has write-only access we silently
+   * fall back to a plain insert — the user-visible behavior ("you wrote a
+   * memory") is unchanged, only the dedup short-circuit is denied.
    */
   async rememberOrMerge(
     input: NewMemory,
     threshold?: number
   ): Promise<RememberOrMergeResult> {
     const scope = this.requireWritableScope(input.scope);
+    if (!this.hasReadAccess(scope)) {
+      const memory = await this.memories.remember({ ...input, scope });
+      return { memory, merged: false };
+    }
     return this.memories.rememberOrMerge({ ...input, scope }, threshold);
   }
 

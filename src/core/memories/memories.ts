@@ -137,6 +137,14 @@ export class Memories {
     if (!Number.isFinite(threshold) || threshold < 0) {
       throw new ValidationError('threshold', `must be a non-negative number, got ${threshold}`);
     }
+    // threshold === 0 is the "dedup disabled" sentinel: every candidate
+    // fails the strict `distance < threshold` gate (distances are >= 0).
+    // Skip the embedding probe entirely so a transient provider failure
+    // cannot turn an opt-out into a hard failure of the underlying insert.
+    if (threshold === 0) {
+      const memory = await this.remember(input);
+      return { memory, merged: false };
+    }
 
     const scopeName = input.scope ?? DEFAULT_SCOPE_NAME;
     const candidate = await this.findDuplicate(input.content, scopeName, threshold);
