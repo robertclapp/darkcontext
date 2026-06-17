@@ -51,7 +51,7 @@ describe('ScopeFilter — the security boundary', () => {
 
   describe('rememberOrMerge', () => {
     it('merges against a candidate in the caller\'s writable scope', async () => {
-      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('t', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const first = await filter.remember({ content: 'shared fact', scope: 'work' });
       const res = await filter.rememberOrMerge({ content: 'shared fact', scope: 'work' });
       expect(res.merged).toBe(true);
@@ -59,7 +59,7 @@ describe('ScopeFilter — the security boundary', () => {
     });
 
     it('requires write access to the target scope', async () => {
-      const filter = new ScopeFilter(fakeTool('ro', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('ro', [{ scope: 'shared', r: true, w: false }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       await expect(
         filter.rememberOrMerge({ content: 'nope', scope: 'shared' })
       ).rejects.toBeInstanceOf(ScopeDeniedError);
@@ -69,7 +69,7 @@ describe('ScopeFilter — the security boundary', () => {
       // Pre-populate 'personal' via the raw domain module (admin path).
       await fx.memories.remember({ content: 'isolated fact', scope: 'personal' });
       // Caller has access only to 'work'.
-      const filter = new ScopeFilter(fakeTool('work', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+      const filter = new ScopeFilter(fakeTool('work', [{ scope: 'work', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
       const res = await filter.rememberOrMerge({ content: 'isolated fact' });
       expect(res.merged).toBe(false);
       // Two distinct memories now exist across the two scopes.

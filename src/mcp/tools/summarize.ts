@@ -14,10 +14,12 @@ export const summarizeTool = defineTool({
       .trim()
       .min(1)
       .describe('Scope to read history from (must be readable; required — see SECURITY.md).'),
+    // Enumerated rather than free string: DarkContext's built-in
+    // importers write exactly these four source values, so a strict
+    // enum gives MCP clients schema-level autocomplete and rejects
+    // typos at the SDK boundary before they hit history search.
     source: z
-      .string()
-      .trim()
-      .min(1)
+      .enum(['chatgpt', 'claude', 'gemini', 'generic'])
       .optional()
       .describe("Restrict to one importer source: 'chatgpt' | 'claude' | 'gemini' | 'generic'."),
     limit: z

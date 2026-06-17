@@ -68,7 +68,7 @@ describe('MCP integration', () => {
   });
 
   it('remember with dedup:true merges a near-duplicate in the same scope', async () => {
-    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations });
+    const filter = new ScopeFilter(fakeTool('t', [{ scope: 'personal', r: true, w: true }]), { memories: fx.memories, documents: fx.documents, workspaces: fx.workspaces, conversations: fx.conversations, summarize: fx.summarize });
     const client = await connectPair(filter);
 
     const first = await client.callTool({
