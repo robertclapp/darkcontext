@@ -52,9 +52,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "eval": "npm run eval:retrieval && npm run eval:security",
+    "eval": "npm run eval:retrieval && npm run eval:security && npm run eval:skew",
     "eval:retrieval": "tsx evals/retrieval/run.ts",
-    "eval:security": "tsx evals/scope-isolation/run.ts"
+    "eval:security": "tsx evals/scope-isolation/run.ts",
+    "eval:skew": "tsx evals/scope-skew/run.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

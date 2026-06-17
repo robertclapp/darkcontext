@@ -18,7 +18,6 @@ import type {
 } from '../core/conversations/index.js';
 import type { ToolGrant, ToolWithGrants } from '../core/tools/index.js';
 import { ScopeDeniedError } from '../core/errors.js';
-import { RECALL_OVERFETCH_RATIO } from '../core/constants.js';
 
 /**
  * Security boundary between MCP callers and the domain modules.
@@ -98,18 +97,11 @@ export class ScopeFilter {
   }
 
   async recall(query: string, opts: { limit?: number; scope?: string } = {}): Promise<RecallHit[]> {
-    if (opts.scope !== undefined) {
-      this.requireReadableScope(opts.scope);
-      return this.memories.recall(query, {
-        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-        scope: opts.scope,
-      });
-    }
-    return this.filterReadableHits(
-      await this.memories.recall(query, { limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
-      (h) => h.memory.scope,
-      opts.limit ?? 10
-    );
+    if (opts.scope !== undefined) this.requireReadableScope(opts.scope);
+    return this.memories.recall(query, {
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      scopes: this.scopeFilterFor(opts.scope),
+    });
   }
 
   forget(id: number): boolean {
@@ -133,32 +125,21 @@ export class ScopeFilter {
     query: string,
     opts: { limit?: number; scope?: string } = {}
   ): Promise<DocumentChunkHit[]> {
-    if (opts.scope !== undefined) {
-      this.requireReadableScope(opts.scope);
-      return this.documents.search(query, {
-        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-        scope: opts.scope,
-      });
-    }
-    return this.filterReadableHits(
-      await this.documents.search(query, { limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
-      (h) => h.scope,
-      opts.limit ?? 10
-    );
+    if (opts.scope !== undefined) this.requireReadableScope(opts.scope);
+    return this.documents.search(query, {
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      scopes: this.scopeFilterFor(opts.scope),
+    });
   }
 
   // ---------- conversation history ----------
 
   async searchHistory(query: string, opts: HistorySearchOptions = {}): Promise<HistoryHit[]> {
-    if (opts.scope !== undefined) {
-      this.requireReadableScope(opts.scope);
-      return this.conversations.search(query, opts);
-    }
-    return this.filterReadableHits(
-      await this.conversations.search(query, { ...opts, limit: (opts.limit ?? 10) * RECALL_OVERFETCH_RATIO }),
-      (h) => h.scope,
-      opts.limit ?? 10
-    );
+    if (opts.scope !== undefined) this.requireReadableScope(opts.scope);
+    return this.conversations.search(query, {
+      ...opts,
+      scopes: this.scopeFilterFor(opts.scope),
+    });
   }
 
   // ---------- workspaces ----------
@@ -228,20 +209,16 @@ export class ScopeFilter {
     }
   }
 
-  private filterReadableHits<T>(
-    hits: T[],
-    getScope: (h: T) => string | null,
-    limit: number
-  ): T[] {
-    const readable = new Set(this.readableScopes());
-    if (readable.size === 0) return [];
-    const filtered: T[] = [];
-    for (const h of hits) {
-      const s = getScope(h);
-      if (s !== null && readable.has(s)) filtered.push(h);
-      if (filtered.length >= limit) break;
-    }
-    return filtered;
+  /**
+   * The scope set to push into a domain search. An explicit (already
+   * authorized) scope narrows to just that one; otherwise the caller's
+   * full readable set. Either way the domain filters in SQL, so a result
+   * outside the set can never come back — and the empty set (no readable
+   * scopes) yields no results. This replaced an over-fetch-then-filter
+   * approach in JS that could starve under scope skew.
+   */
+  private scopeFilterFor(explicitScope: string | undefined): readonly string[] {
+    return explicitScope !== undefined ? [explicitScope] : this.readableScopes();
   }
 
   private safeGetMemory(id: number): Memory | null {

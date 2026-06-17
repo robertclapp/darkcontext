@@ -4,6 +4,29 @@ All notable changes to DarkContext will be documented here. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/). Dates
 are release dates; unreleased work lives at the top.
 
+## [Unreleased]
+
+### Fixed
+- **Vector recall scope starvation.** `sqlite-vec` returns the globally
+  nearest `k` vectors before any scope/source filter applies, so a dense
+  neighbouring scope could crowd a caller's in-scope matches out of the
+  candidate window — returning fewer results than exist, or none. Recall
+  isolation was never violated (out-of-scope rows were always dropped);
+  the bug was under-recall, not a leak. Vector search now uses adaptive
+  widening (`store/vectorSearch.ts`): it pulls a growing nearest-neighbour
+  window and filters in SQL until enough in-scope hits surface or the
+  index is exhausted. A match buried at global rank 500+ is now recalled
+  at limit 5 (see `npm run eval:skew`).
+
+### Changed
+- The access layer (`ScopeFilter`) now pushes a tool's readable-scope set
+  into the domain query as a SQL `IN (…)` filter instead of over-fetching
+  4× and filtering in JS. Filtering happens in one place (SQL), the magic
+  over-fetch ratio is gone, and the empty readable set short-circuits to
+  no results. Scope isolation is unchanged (verified by `eval:security`).
+- Recall/search options accept an explicit `scopes` set (in addition to
+  the single `scope`); the FTS5 and `LIKE` fallbacks honour it too.
+
 ## [0.2.0] — 2026-04-18
 
 First polish pass after v0.1. Adds operational CLI commands, published

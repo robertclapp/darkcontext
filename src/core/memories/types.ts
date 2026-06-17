@@ -25,5 +25,10 @@ export interface RecallHit {
 
 export interface RecallOptions {
   limit?: number;
+  /** Single scope filter (CLI ergonomics). */
   scope?: string;
+  /** Explicit scope set — the access layer pushes a tool's full readable
+   *  set here so filtering happens in SQL. Wins over `scope`. An empty
+   *  array means "no readable scopes" → no results. */
+  scopes?: readonly string[];
 }

@@ -3,6 +3,8 @@ import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
+import { inClause, widenedVectorSearch, type KnnCandidate } from '../store/vectorSearch.js';
+import { normalizeScopeList } from '../store/scopeList.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME } from '../constants.js';
@@ -102,11 +104,14 @@ export class Memories {
 
   async recall(query: string, opts: RecallOptions = {}): Promise<RecallHit[]> {
     const limit = opts.limit ?? 10;
+    const scopes = normalizeScopeList(opts);
+    // An explicit empty readable set means "this caller can see nothing".
+    if (scopes && scopes.length === 0) return [];
     if (this.db.hasVec && this.db.embedDim > 0) {
       const [qv] = await this.embeddings.embed([query]);
-      if (qv) return this.vectorRecall(qv, limit, opts.scope);
+      if (qv) return this.vectorRecall(qv, limit, scopes);
     }
-    return this.keywordRecall(query, limit, opts.scope);
+    return this.keywordRecall(query, limit, scopes);
   }
 
   /**
@@ -124,17 +129,39 @@ export class Memories {
     return rows.length;
   }
 
-  private vectorRecall(qv: number[], limit: number, scope?: string): RecallHit[] {
-    const sql = scope ? VECTOR_RECALL_SCOPED : VECTOR_RECALL_UNSCOPED;
-    const stmt = cached(this.db.raw, sql);
-    const rows = (scope
-      ? stmt.all(VectorIndex.queryBlob(qv), limit, scope)
-      : stmt.all(VectorIndex.queryBlob(qv), limit)) as (MemoryRow & { distance: number })[];
-    return rows.map((r) => ({
-      memory: rowToMemory(r),
-      score: 1 / (1 + r.distance),
-      match: 'vector' as const,
-    }));
+  /**
+   * Vector recall with adaptive widening so a dense neighbouring scope
+   * can't crowd in-scope matches out of the candidate window (see
+   * store/vectorSearch.ts). Scope filtering happens during hydration, in
+   * SQL, against the full window — never as a post-k-NN truncation.
+   */
+  private vectorRecall(qv: number[], limit: number, scopes?: readonly string[]): RecallHit[] {
+    return widenedVectorSearch({
+      db: this.db.raw,
+      vecTable: 'memories_vec',
+      queryVector: qv,
+      limit,
+      hydrate: (window) => this.hydrateVectorHits(window, scopes),
+    });
+  }
+
+  /** Hydrate a nearest-neighbour window into scope-filtered hits, ordered
+   *  by distance. Returns every survivor (the widening loop slices). */
+  private hydrateVectorHits(window: KnnCandidate[], scopes?: readonly string[]): RecallHit[] {
+    if (window.length === 0) return [];
+    const distById = new Map(window.map((c) => [c.rowid, c.distance]));
+    const ids = window.map((c) => c.rowid);
+    const scopeFilter = inClause('s.name', scopes);
+    const sql = `${BASE_SELECT} WHERE m.id IN (${ids.map(() => '?').join(', ')})${scopeFilter.sql}`;
+    const rows = this.db.raw.prepare(sql).all(...ids, ...scopeFilter.params) as MemoryRow[];
+    return rows
+      .map((r) => ({ row: r, distance: distById.get(r.id) ?? Infinity }))
+      .sort((a, b) => a.distance - b.distance)
+      .map(({ row, distance }) => ({
+        memory: rowToMemory(row),
+        score: 1 / (1 + distance),
+        match: 'vector' as const,
+      }));
   }
 
   /**
@@ -146,20 +173,33 @@ export class Memories {
    * `LIKE '%query%'` only when FTS5 isn't compiled into SQLite (rare) or
    * the query sanitizes to empty.
    */
-  private keywordRecall(query: string, limit: number, scope?: string): RecallHit[] {
+  private keywordRecall(query: string, limit: number, scopes?: readonly string[]): RecallHit[] {
     const ftsQuery = buildFtsQuery(query);
     if (isFtsAvailable(this.db.raw) && ftsQuery.length > 0) {
-      return this.ftsRecall(ftsQuery, limit, scope);
+      return this.ftsRecall(ftsQuery, limit, scopes);
     }
-    return this.likeRecall(query, limit, scope);
+    return this.likeRecall(query, limit, scopes);
   }
 
-  private ftsRecall(ftsQuery: string, limit: number, scope?: string): RecallHit[] {
-    const sql = scope ? FTS_RECALL_SCOPED : FTS_RECALL_UNSCOPED;
-    const stmt = cached(this.db.raw, sql);
-    const rows = (scope
-      ? stmt.all(ftsQuery, scope, limit)
-      : stmt.all(ftsQuery, limit)) as (MemoryRow & { rank: number })[];
+  // FTS5 is not a top-k table: it returns every match, the scope IN-filter
+  // applies to that full set, and LIMIT truncates last — so the lexical
+  // path can't starve the way vec0 does. The scope set is still pushed
+  // into SQL for correctness (and to match the vector path's semantics).
+  private ftsRecall(ftsQuery: string, limit: number, scopes?: readonly string[]): RecallHit[] {
+    const scopeFilter = inClause('s.name', scopes);
+    const sql = `
+      SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+             m.source, m.created_at, m.updated_at, f.rank AS rank
+      FROM memories_fts f
+      JOIN memories m ON m.id = f.rowid
+      LEFT JOIN scopes s ON s.id = m.scope_id
+      WHERE memories_fts MATCH ?${scopeFilter.sql}
+      ORDER BY f.rank
+      LIMIT ?
+    `;
+    const rows = cached(this.db.raw, sql).all(ftsQuery, ...scopeFilter.params, limit) as (MemoryRow & {
+      rank: number;
+    })[];
     // FTS5 rank is negative (more-negative = better). Normalize to (0, 1].
     return rows.map((r) => ({
       memory: rowToMemory(r),
@@ -168,19 +208,16 @@ export class Memories {
     }));
   }
 
-  private likeRecall(query: string, limit: number, scope?: string): RecallHit[] {
+  private likeRecall(query: string, limit: number, scopes?: readonly string[]): RecallHit[] {
     const like = `%${query.toLowerCase()}%`;
+    const scopeFilter = inClause('s.name', scopes);
     const sql = `
       ${BASE_SELECT}
-      WHERE LOWER(m.content) LIKE ?
-        ${scope ? 'AND s.name = ?' : ''}
+      WHERE LOWER(m.content) LIKE ?${scopeFilter.sql}
       ORDER BY m.created_at DESC
       LIMIT ?
     `;
-    const params: unknown[] = [like];
-    if (scope) params.push(scope);
-    params.push(limit);
-    const rows = this.db.raw.prepare(sql).all(...params) as MemoryRow[];
+    const rows = cached(this.db.raw, sql).all(like, ...scopeFilter.params, limit) as MemoryRow[];
     return rows.map((r) => ({
       memory: rowToMemory(r),
       score: 0.3,
@@ -209,48 +246,3 @@ function rowToMemory(row: MemoryRow): Memory {
   };
 }
 
-// Hot-path SQL kept as module-level constants so `cached()` can memoize the
-// prepared statement by reference. Two variants per search: with and without
-// the scope filter — bounded cache growth, fully expressible as static SQL.
-
-const VECTOR_RECALL_UNSCOPED = `
-  SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-         m.source, m.created_at, m.updated_at, v.distance AS distance
-  FROM memories_vec v
-  JOIN memories m ON m.id = v.rowid
-  LEFT JOIN scopes s ON s.id = m.scope_id
-  WHERE v.embedding MATCH ? AND k = ?
-  ORDER BY v.distance
-`;
-
-const VECTOR_RECALL_SCOPED = `
-  SELECT m.id AS id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-         m.source, m.created_at, m.updated_at, v.distance AS distance
-  FROM memories_vec v
-  JOIN memories m ON m.id = v.rowid
-  LEFT JOIN scopes s ON s.id = m.scope_id
-  WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
-  ORDER BY v.distance
-`;
-
-const FTS_RECALL_UNSCOPED = `
-  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-         m.source, m.created_at, m.updated_at, f.rank AS rank
-  FROM memories_fts f
-  JOIN memories m ON m.id = f.rowid
-  LEFT JOIN scopes s ON s.id = m.scope_id
-  WHERE memories_fts MATCH ?
-  ORDER BY f.rank
-  LIMIT ?
-`;
-
-const FTS_RECALL_SCOPED = `
-  SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
-         m.source, m.created_at, m.updated_at, f.rank AS rank
-  FROM memories_fts f
-  JOIN memories m ON m.id = f.rowid
-  LEFT JOIN scopes s ON s.id = m.scope_id
-  WHERE memories_fts MATCH ? AND s.name = ?
-  ORDER BY f.rank
-  LIMIT ?
-`;
