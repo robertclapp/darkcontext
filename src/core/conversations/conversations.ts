@@ -5,6 +5,7 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
+import { RECALL_OVERFETCH_RATIO } from '../constants.js';
 
 import type {
   Conversation,
@@ -182,8 +183,22 @@ export class Conversations {
 
   private vectorSearch(qv: number[], limit: number, opts: HistorySearchOptions): HistoryHit[] {
     const filters: string[] = [];
-    if (opts.scope) filters.push('AND s.name = ?');
-    if (opts.source) filters.push('AND c.source = ?');
+    const filterParams: unknown[] = [];
+    if (opts.scope) {
+      filters.push('AND s.name = ?');
+      filterParams.push(opts.scope);
+    }
+    if (opts.source) {
+      filters.push('AND c.source = ?');
+      filterParams.push(opts.source);
+    }
+    // sqlite-vec resolves its `k` KNN BEFORE the scope/source filter, so
+    // when filtering we over-fetch candidates and trim with a trailing
+    // LIMIT — otherwise a minority scope/source gets crowded out of the
+    // k budget by closer messages elsewhere. An unfiltered search needs
+    // no over-fetch (every neighbor qualifies); `k` bounds it directly.
+    const filtered = filters.length > 0;
+    const k = filtered ? limit * RECALL_OVERFETCH_RATIO : limit;
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
              m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
@@ -195,17 +210,14 @@ export class Conversations {
       WHERE v.embedding MATCH ? AND k = ?
         ${filters.join(' ')}
       ORDER BY v.distance
+      ${filtered ? 'LIMIT ?' : ''}
     `;
     // SQL shape is bounded by the 4 scope x source combinations, so
     // preparedCache memoizes a small, finite set of statements.
     const stmt = cached(this.db.raw, sql);
-    const rows = (opts.scope && opts.source
-      ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope, opts.source)
-      : opts.scope
-        ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope)
-        : opts.source
-          ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.source)
-          : stmt.all(VectorIndex.queryBlob(qv), limit)) as HitRow[];
+    const params: unknown[] = [VectorIndex.queryBlob(qv), k, ...filterParams];
+    if (filtered) params.push(limit);
+    const rows = stmt.all(...params) as HitRow[];
     return rows.map((r) => rowToHit(r, 'vector'));
   }
 

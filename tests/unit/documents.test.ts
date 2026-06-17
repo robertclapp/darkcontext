@@ -66,4 +66,20 @@ describe('Documents', () => {
       .get(document.id) as { c: number };
     expect(chunks.c).toBe(0);
   });
+
+  it('scoped search surfaces the in-scope chunk even when other scopes have closer chunks', async () => {
+    if (!fx.db.hasVec) return; // vector-only scenario
+    // Several exact-match chunks in 'personal' would consume a naive
+    // k=limit KNN budget before the scope filter runs; the over-fetch
+    // must still surface the 'work' chunk for a scoped='work' search.
+    for (let i = 0; i < 5; i++) {
+      await fx.documents.ingest({ title: `p${i}`, content: 'alpha beta gamma', scope: 'personal' });
+    }
+    await fx.documents.ingest({ title: 'w', content: 'alpha beta gamma delta epsilon', scope: 'work' });
+
+    const hits = await fx.documents.search('alpha beta gamma', { limit: 3, scope: 'work' });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.scope === 'work')).toBe(true);
+    expect(hits.some((h) => h.title === 'w')).toBe(true);
+  });
 });

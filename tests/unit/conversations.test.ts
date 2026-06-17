@@ -67,6 +67,32 @@ describe('Conversations', () => {
     expect(workHits.every((h) => h.scope === 'work')).toBe(true);
   });
 
+  it('scoped search surfaces the in-scope message even when another scope has closer messages', async () => {
+    if (!fx.db.hasVec) return; // vector-only scenario
+    // Several exact-match messages in 'personal' would consume a naive
+    // k=limit KNN budget before the scope filter; the over-fetch must
+    // still surface the 'work' message for a scoped='work' search.
+    const exact = (id: string): ImportedConversation => ({
+      externalId: id,
+      title: id,
+      startedAt: 1700000000000,
+      messages: [{ role: 'user', content: 'alpha beta gamma', ts: 1700000000000 }],
+    });
+    for (let i = 0; i < 5; i++) {
+      await fx.conversations.ingest('chatgpt', [exact(`p${i}`)], { scope: 'personal' });
+    }
+    await fx.conversations.ingest('chatgpt', [{
+      externalId: 'w',
+      title: 'w',
+      startedAt: 1700000000000,
+      messages: [{ role: 'user', content: 'alpha beta gamma delta epsilon', ts: 1700000000000 }],
+    }], { scope: 'work' });
+
+    const hits = await fx.conversations.search('alpha beta gamma', { limit: 3, scope: 'work' });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.scope === 'work')).toBe(true);
+  });
+
   it('delete cascades to messages and vectors', async () => {
     await fx.conversations.ingest('chatgpt', sample);
     const list = fx.conversations.list();

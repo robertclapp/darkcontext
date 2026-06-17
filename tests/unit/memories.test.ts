@@ -70,4 +70,22 @@ describe('Memories', () => {
     expect(hits.length).toBe(1);
     expect(hits[0]!.match).toBe('keyword');
   });
+
+  it('scoped recall surfaces the in-scope hit even when other scopes hold closer vectors', async () => {
+    if (!db.hasVec) return; // vector-only scenario; skip if sqlite-vec absent
+
+    // Five 'personal' memories are an exact match for the query (distance
+    // ~0), one 'work' memory is a near (not exact) match. With a naive
+    // `k = limit` KNN + post-filter, the limit budget is consumed by the
+    // closer personal rows and the work row is dropped — returning nothing
+    // for a scoped='work' query. The over-fetch must rescue it.
+    for (let i = 0; i < 5; i++) {
+      await memories.remember({ content: 'alpha beta gamma', scope: 'personal' });
+    }
+    const work = await memories.remember({ content: 'alpha beta gamma delta epsilon', scope: 'work' });
+
+    const hits = await memories.recall('alpha beta gamma', { limit: 3, scope: 'work' });
+    expect(hits.map((h) => h.memory.id)).toContain(work.id);
+    expect(hits.every((h) => h.memory.scope === 'work')).toBe(true);
+  });
 });

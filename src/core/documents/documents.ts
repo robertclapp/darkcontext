@@ -5,6 +5,7 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
+import { RECALL_OVERFETCH_RATIO } from '../constants.js';
 
 import { chunkText, type ChunkOptions } from './chunker.js';
 import type {
@@ -136,8 +137,11 @@ export class Documents {
   private vectorSearch(qv: number[], limit: number, scope?: string): DocumentChunkHit[] {
     const sql = scope ? DOC_VECTOR_SCOPED : DOC_VECTOR_UNSCOPED;
     const stmt = cached(this.db.raw, sql);
+    // Over-fetch then trim on the scoped path: sqlite-vec's `k` KNN runs
+    // before the `s.name` filter, so without over-fetch a minority scope's
+    // chunks get crowded out of the budget by closer chunks elsewhere.
     const rows = (scope
-      ? stmt.all(VectorIndex.queryBlob(qv), limit, scope)
+      ? stmt.all(VectorIndex.queryBlob(qv), limit * RECALL_OVERFETCH_RATIO, scope, limit)
       : stmt.all(VectorIndex.queryBlob(qv), limit)) as ChunkHitRow[];
     return rows.map((r) => ({
       documentId: r.id,
@@ -237,6 +241,7 @@ const DOC_VECTOR_SCOPED = `
   LEFT JOIN scopes s ON s.id = d.scope_id
   WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
   ORDER BY v.distance
+  LIMIT ?
 `;
 
 const DOC_FTS_UNSCOPED = `

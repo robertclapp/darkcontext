@@ -5,7 +5,7 @@ import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
-import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME } from '../constants.js';
+import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME, RECALL_OVERFETCH_RATIO } from '../constants.js';
 
 import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
 
@@ -127,8 +127,15 @@ export class Memories {
   private vectorRecall(qv: number[], limit: number, scope?: string): RecallHit[] {
     const sql = scope ? VECTOR_RECALL_SCOPED : VECTOR_RECALL_UNSCOPED;
     const stmt = cached(this.db.raw, sql);
+    // sqlite-vec applies its `k` KNN BEFORE the `s.name` filter, so a
+    // scoped query must over-fetch candidates and trim afterwards — else a
+    // scope that's a minority of the store gets its own near-matches
+    // crowded out of the k budget by closer rows in other scopes. The
+    // unscoped query needs no over-fetch (every neighbor qualifies); its
+    // caller already inflates `limit` when it post-filters by readable
+    // scope. See DEDUP_CANDIDATE_K for the same reasoning in findDuplicate.
     const rows = (scope
-      ? stmt.all(VectorIndex.queryBlob(qv), limit, scope)
+      ? stmt.all(VectorIndex.queryBlob(qv), limit * RECALL_OVERFETCH_RATIO, scope, limit)
       : stmt.all(VectorIndex.queryBlob(qv), limit)) as (MemoryRow & { distance: number })[];
     return rows.map((r) => ({
       memory: rowToMemory(r),
@@ -231,6 +238,7 @@ const VECTOR_RECALL_SCOPED = `
   LEFT JOIN scopes s ON s.id = m.scope_id
   WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
   ORDER BY v.distance
+  LIMIT ?
 `;
 
 const FTS_RECALL_UNSCOPED = `
