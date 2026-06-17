@@ -38,18 +38,25 @@ export async function runConnect(
 
   await withAppContext(opts, (ctx) => {
     const { token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false });
-    const dbArgs = opts.db ? ['--db', opts.db] : [];
+    // Forward the same overrides the user passed to `connect` into the
+    // generated `dcx serve` command. Without this, `dcx connect …
+    // --provider onnx` prints a config that launches the server with
+    // the default embeddings provider — a silent mismatch the user
+    // would only notice later via wrong recall results.
+    const serveArgs: string[] = ['serve'];
+    if (opts.db) serveArgs.push('--db', opts.db);
+    if (opts.provider) serveArgs.push('--provider', opts.provider);
 
-    out(`Provisioned '${toolName}' for ${client} — scopes: ${scopes.join(', ')}`);
+    const readOnlyTag = opts.readOnly ? ' (read-only)' : '';
+    out(`Provisioned '${toolName}' for ${client} — scopes: ${scopes.join(', ')}${readOnlyTag}`);
     out('');
-    out(renderClientConfig(client, toolName, token, dbArgs));
+    out(renderClientConfig(client, toolName, token, serveArgs));
     out('');
     out('The token is shown once. Re-run with `--name` to provision another client against the same shared scope.');
   });
 }
 
-function renderClientConfig(client: Client, toolName: string, token: string, dbArgs: string[]): string {
-  const args = ['serve', ...dbArgs];
+function renderClientConfig(client: Client, toolName: string, token: string, args: string[]): string {
   const mcpServers = {
     mcpServers: { [toolName]: { command: 'dcx', args, env: { DARKCONTEXT_TOKEN: token } } },
   };

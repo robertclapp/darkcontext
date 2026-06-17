@@ -31,7 +31,11 @@ export class ClaudeCodeImporter implements Importer {
 
     for (const line of lines) {
       if (typeof line.sessionId === 'string' && !sessionId) sessionId = line.sessionId;
-      const role = line.message?.role ?? (line.type === 'user' || line.type === 'assistant' ? line.type : undefined);
+      // Use the message role exclusively. The line-level `type` field is
+      // an event category (e.g. future `user`-as-event-kind), not a chat
+      // turn role — relying on it as a fallback would misclassify events
+      // that happen to share the literal string.
+      const role = line.message?.role;
       if (role !== 'user' && role !== 'assistant') continue;
       const text = extractText(line.message?.content);
       if (!text) continue;

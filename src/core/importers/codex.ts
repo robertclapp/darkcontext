@@ -40,9 +40,14 @@ export class CodexImporter implements Importer {
       const ev = (line.payload ?? line) as CodexLine & { role?: string; content?: unknown };
 
       // Capture a session id from a meta line (either shape) once.
+      // The condition is intentionally tight: a plain message event can
+      // carry a top-level `id` (Anthropic-style response shapes) and
+      // would otherwise win the `!sessionId` race against the real
+      // `session_meta` line, silently clobbering the correct id.
       if (!sessionId) {
+        const isMeta = line.type === 'session_meta' || ev.type === 'session_meta';
         const id = line.payload?.id ?? line.id;
-        if (typeof id === 'string' && (line.type === 'session_meta' || ev.type === 'session_meta' || line.id)) {
+        if (isMeta && typeof id === 'string') {
           sessionId = id;
         }
       }

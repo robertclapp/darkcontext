@@ -120,7 +120,7 @@ export async function runImportAuto(
         continue;
       }
       anyFound = true;
-      const totals = await ingestFiles(ctx, kind, files, opts.scope);
+      const totals = await ingestFiles(ctx, kind, files, opts.scope, out);
       out(
         `${kind}: ${files.length} files → ${totals.inserted} new conversations, ` +
           `${totals.messages} messages (${totals.skipped} already present)`
@@ -136,15 +136,20 @@ async function ingestFiles(
   ctx: AppContext,
   kind: ImporterKind,
   files: string[],
-  scope: string | undefined
+  scope: string | undefined,
+  out: (line: string) => void
 ): Promise<{ inserted: number; messages: number; skipped: number }> {
   const totals = { inserted: 0, messages: 0, skipped: 0 };
   for (const file of files) {
     let parsed: ImportedConversation[];
     try {
       parsed = parseFile(kind, file);
-    } catch {
-      // One unreadable session shouldn't abort the whole sweep.
+    } catch (err) {
+      // One unreadable session shouldn't abort the whole sweep, but a
+      // silent skip in a cron run could leave sessions unimported
+      // forever — surface a warning line so the operator can see why
+      // their counts don't match what's on disk.
+      out(`  warning: skipped ${file} (${err instanceof Error ? err.message : String(err)})`);
       continue;
     }
     if (parsed.length === 0) continue;
