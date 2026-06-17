@@ -114,7 +114,7 @@ export async function startHttpServer(opts: HttpServeOptions = {}): Promise<Star
       if (isUiApiPath(pathname)) {
         if (!checkBearer(req, expectedHash)) return unauthorized(res);
         try {
-          await handleUiApi(req, res, boundFilter);
+          await handleUiApi(req, res, boundFilter, auditor);
         } catch (err) {
           if (!res.headersSent) {
             res.statusCode = 500;

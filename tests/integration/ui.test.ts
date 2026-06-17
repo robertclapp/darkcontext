@@ -136,11 +136,14 @@ describe('Web UI — read-only HTML + JSON API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('rejects an unreadable explicit scope as a 400 with the ScopeFilter message', async () => {
+    it('denies an unreadable explicit scope with a generic 403 (never reflects which scope is restricted)', async () => {
       const res = await authedFetch('/ui/api/recall?q=x&scope=other');
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
       const body = (await res.json()) as ErrorBody;
-      expect(body.error).toMatch(/scope|denied/i);
+      expect(body.error).toBe('permission denied');
+      // Crucially the scope NAME does not appear in the response — that would
+      // confirm `other` is access-restricted vs simply empty.
+      expect(body.error).not.toContain('other');
     });
   });
 
