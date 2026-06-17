@@ -102,6 +102,26 @@ describe('vector search resists scope starvation', () => {
     expect(hits[0]!.title).toBe('wanted');
   });
 
+  it('memories: chunked hydration survives windows that exceed the SQL param limit', async () => {
+    // Bury the target deep enough that adaptive widening pulls a window
+    // larger than the hydrate chunk size (900). With factor 4 and start
+    // k=5, the widening sequence is 5,20,80,320,1280 — at 1280 we
+    // exceed 900, forcing chunked hydration. Without chunking, a wide
+    // window would bind > SQLITE_MAX_VARIABLE_NUMBER on legacy SQLite
+    // and crash; the chunked path must still recall the buried match.
+    const mem = new Memories(db, new LinearProvider());
+    const NOISE = 1500;
+    for (let i = 0; i < NOISE; i++) {
+      await mem.remember({ content: `n:0.${String(i).padStart(4, '0')}`, scope: 'noise' });
+    }
+    await mem.remember({ content: 'n:1', scope: 'target' });
+
+    const hits = await mem.recall('n:0', { limit: 5, scope: 'target' });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.memory.scope).toBe('target');
+    expect(hits[0]!.memory.content).toBe('n:1');
+  }, 30_000);
+
   it('conversations: dense neighbouring scope cannot hide an in-scope message', async () => {
     const conv = new Conversations(db, new LinearProvider());
     const noise = Array.from({ length: 40 }, (_, i) => ({

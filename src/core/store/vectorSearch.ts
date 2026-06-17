@@ -48,17 +48,29 @@ function countVectorRows(db: Database.Database, vecTable: string): number {
 }
 
 /**
+ * Max rowids passed to `hydrate` in one call. `hydrate` binds one SQL
+ * host parameter per rowid (plus a few for scope/source); SQLite's
+ * compile-time `SQLITE_MAX_VARIABLE_NUMBER` is 32766 on modern builds
+ * but as low as 999 on legacy builds. We chunk well under the legacy
+ * floor so adaptive widening to large `k` cannot trip the param limit.
+ */
+const HYDRATE_BATCH = 900;
+
+/**
  * Run an adaptive-widening vector search.
  *
- * `hydrate` receives the current nearest-neighbour window (ordered by
- * distance) and must return ALL rows that survive the caller's filter
- * (scope, source, …), order-preserved. We keep widening `k` until either
- * `limit` survivors are found or the index is exhausted, then return the
- * top `limit`.
+ * `hydrate` receives a slice of the current nearest-neighbour window
+ * (ordered by distance) and must return ALL rows in that slice that
+ * survive the caller's filter (scope, source, …). Slices are processed
+ * in window order and their outputs concatenated; since the window is
+ * already sorted ASC by distance and slices don't overlap, the merged
+ * result stays globally distance-sorted. We keep widening `k` until
+ * either `limit` survivors are found or the index is exhausted, then
+ * return the top `limit`.
  *
  * The `count(*)` to find the widening ceiling is only issued when we
- * actually need to widen (first window came up short while full), so the
- * common no-filter / not-skewed case stays a single query.
+ * actually need to widen (first window came up short while full), so
+ * the common no-filter / not-skewed case stays a single query.
  */
 export function widenedVectorSearch<T>(params: {
   db: Database.Database;
@@ -74,7 +86,7 @@ export function widenedVectorSearch<T>(params: {
   let total = -1; // resolved lazily, only if we must widen
   for (;;) {
     const window = knnCandidates(db, vecTable, queryVector, k);
-    const survivors = hydrate(window);
+    const survivors = hydrateChunked(window, limit, hydrate);
     if (survivors.length >= limit) return survivors.slice(0, limit);
     // Fewer candidates came back than we asked for ⇒ the index is
     // exhausted; this is every match there is.
@@ -83,6 +95,24 @@ export function widenedVectorSearch<T>(params: {
     if (k >= total) return survivors.slice(0, limit);
     k = Math.min(k * RECALL_WIDEN_FACTOR, total);
   }
+}
+
+/** Drive `hydrate` over the window in HYDRATE_BATCH-sized slices. Stops
+ *  early once survivors reach `limit` — chunk N has strictly greater
+ *  distances than chunk N-1, so later chunks can only add ties or worse
+ *  matches than what we already have. */
+function hydrateChunked<T>(
+  window: KnnCandidate[],
+  limit: number,
+  hydrate: (window: KnnCandidate[]) => T[]
+): T[] {
+  if (window.length <= HYDRATE_BATCH) return hydrate(window);
+  const out: T[] = [];
+  for (let i = 0; i < window.length; i += HYDRATE_BATCH) {
+    out.push(...hydrate(window.slice(i, i + HYDRATE_BATCH)));
+    if (out.length >= limit) return out;
+  }
+  return out;
 }
 
 /**

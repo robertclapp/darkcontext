@@ -16,7 +16,9 @@ are release dates; unreleased work lives at the top.
   widening (`store/vectorSearch.ts`): it pulls a growing nearest-neighbour
   window and filters in SQL until enough in-scope hits surface or the
   index is exhausted. A match buried at global rank 500+ is now recalled
-  at limit 5 (see `npm run eval:skew`).
+  at limit 5 (see `npm run eval:skew`). Hydration is chunked (900 ids per
+  call) so a widened window can't exceed SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+  bind-parameter limit on large stores.
 
 ### Changed
 - The access layer (`ScopeFilter`) now pushes a tool's readable-scope set
