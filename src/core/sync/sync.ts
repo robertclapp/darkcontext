@@ -93,7 +93,13 @@ interface LockBody {
  */
 export async function push(opts: SyncOptions, now: number = opts.now ?? Date.now()): Promise<SyncResult> {
   const sourcePath = resolveOrThrow(opts.source, 'source');
-  const destPath = resolve(opts.dest);
+  // Validate dest the same way: `resolve("")` silently collapses to cwd
+  // and would point the destination at the *current directory* — a
+  // particularly nasty failure mode for a destructive op (push writes
+  // <dest>.tmp/<dest>.lock alongside the resolved path). Reject empty /
+  // whitespace-only paths up front so the operator hears about a bad
+  // --dest immediately.
+  const destPath = resolveOrThrow(opts.dest, 'dest');
 
   if (!existsSync(sourcePath)) {
     throw new NotFoundError('local store', sourcePath);
@@ -144,7 +150,9 @@ export async function pull(
   now: number = opts.now ?? Date.now()
 ): Promise<SyncResult> {
   const sourcePath = resolveOrThrow(opts.source, 'source');
-  const destPath = resolve(opts.dest);
+  // See push() for why empty/whitespace `dest` must throw rather than
+  // silently resolving to cwd.
+  const destPath = resolveOrThrow(opts.dest, 'dest');
 
   if (!existsSync(sourcePath)) {
     throw new NotFoundError('remote store', sourcePath);

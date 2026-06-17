@@ -102,20 +102,29 @@ describe('sync (push / pull)', () => {
     });
 
     it('releases the lock even when the copy fails mid-way', async () => {
-      // Point the dest at a path whose parent is a FILE (not a dir) so
-      // mkdirSync succeeds but renameSync/backup fails. A different
-      // recipe for failure than "source missing" — this one crashes
-      // AFTER acquireLock, exercising the try/finally.
+      // Crash AFTER acquireLock by pre-creating a DIRECTORY at the
+      // expected .tmp target so SQLite's backup() can't write there.
+      // mkdirSync(parent, recursive: true) succeeds (parent is a real
+      // dir) and acquireLock writes <dest>.lock; the failure then
+      // happens inside the try block, which is the path we want to
+      // exercise. Earlier versions used a *file* as the dest's parent,
+      // but mkdirSync(parent, recursive: true) threw ENOTDIR/EEXIST
+      // BEFORE acquireLock and the test silently passed without ever
+      // testing the lock-release path it claimed to.
       const fs = await import('node:fs');
-      const parentFile = join(dir, 'blocker');
-      fs.writeFileSync(parentFile, 'i am not a directory');
-      const badDest = join(parentFile, 'oops.db');
+      fs.mkdirSync(join(dir, 'remote'), { recursive: true });
+      // Make backup()'s target unwritable by occupying it with a dir.
+      fs.mkdirSync(`${remoteDb}.dcx-tmp`, { recursive: true });
 
-      // acquireLock() is the first thing that runs in push(). If the
-      // subsequent backup fails, the finally block must still remove
-      // the lock file so the next operator isn't blocked by a ghost.
-      await expect(push({ source: localDb, dest: badDest })).rejects.toThrow();
-      expect(fs.existsSync(`${badDest}.lock`)).toBe(false);
+      await expect(push({ source: localDb, dest: remoteDb })).rejects.toThrow();
+      // The crash happened AFTER acquireLock — verify the finally block
+      // removed the lock so the next operator isn't blocked by a ghost.
+      expect(fs.existsSync(`${remoteDb}.lock`)).toBe(false);
+    });
+
+    it('rejects an empty dest path with ValidationError (never silently resolves to cwd)', async () => {
+      await expect(push({ source: localDb, dest: '' })).rejects.toBeInstanceOf(ValidationError);
+      await expect(push({ source: localDb, dest: '   ' })).rejects.toBeInstanceOf(ValidationError);
     });
   });
 
@@ -172,6 +181,12 @@ describe('sync (push / pull)', () => {
       await expect(
         pull({ source: join(dir, 'no-remote.db'), dest: join(dir, 'whatever.db') })
       ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('rejects an empty dest path with ValidationError (never silently resolves to cwd)', async () => {
+      await push({ source: localDb, dest: remoteDb });
+      await expect(pull({ source: remoteDb, dest: '' })).rejects.toBeInstanceOf(ValidationError);
+      await expect(pull({ source: remoteDb, dest: '   ' })).rejects.toBeInstanceOf(ValidationError);
     });
 
     it('locks the SOURCE during pull so a concurrent push to the same remote is blocked', async () => {
