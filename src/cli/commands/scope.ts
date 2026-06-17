@@ -68,9 +68,17 @@ export function registerScopeCommands(program: Command): void {
     .description('Remove the retention policy for a scope (data is retained forever)')
     .option('--db <path>', 'override database path')
     .action(async (name: string, opts: CommonCliOptions) => {
+      // Normalize the same way `set-retention` does (Retention.set trims
+      // the name before storing it). Without this, a whitespace-padded
+      // name can be set and then fail to clear in the same session.
+      const scopeName = name.trim();
       await withAppContext(opts, (ctx) => {
-        const ok = ctx.retention.clear(name);
-        console.log(ok ? `cleared retention for scope '${name}'` : `scope '${name}' had no retention rule`);
+        const ok = ctx.retention.clear(scopeName);
+        console.log(
+          ok
+            ? `cleared retention for scope '${scopeName}'`
+            : `scope '${scopeName}' had no retention rule`
+        );
       });
     });
 }

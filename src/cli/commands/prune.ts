@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
-import { ValidationError } from '../../core/errors.js';
+import { NotFoundError, ValidationError } from '../../core/errors.js';
 
 export interface PruneOptions extends CommonCliOptions {
   scope?: string;
@@ -25,18 +25,24 @@ export async function runPrune(
   }
 
   await withAppContext(opts, async (ctx) => {
-    // Pre-check the scoped case: Retention.prune({ scope }) THROWS
-    // NotFoundError when the named scope has no rule, so calling it blindly
-    // would surface an uncaught error instead of the friendly line below.
-    if (scope !== undefined && ctx.retention.get(scope) === null) {
-      out(`scope '${scope}' has no retention rule — nothing to prune`);
-      return;
+    // Retention.prune({ scope }) THROWS NotFoundError when the named
+    // scope has no rule. A separate `get()` pre-check would race against
+    // the prune (rule could be cleared between the two calls and still
+    // surface an uncaught throw), so handle the error at the point of
+    // execution instead and collapse it to the friendly line.
+    let result;
+    try {
+      result = ctx.retention.prune({
+        ...(scope !== undefined ? { scope } : {}),
+        ...(opts.dryRun ? { dryRun: true } : {}),
+      });
+    } catch (err) {
+      if (scope !== undefined && err instanceof NotFoundError) {
+        out(`scope '${scope}' has no retention rule — nothing to prune`);
+        return;
+      }
+      throw err;
     }
-
-    const result = ctx.retention.prune({
-      ...(scope !== undefined ? { scope } : {}),
-      ...(opts.dryRun ? { dryRun: true } : {}),
-    });
 
     if (result.scanned === 0) {
       out(

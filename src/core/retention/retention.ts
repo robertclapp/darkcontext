@@ -172,58 +172,61 @@ export class Retention {
     if (!scopeRow) {
       return { memories: 0, documents: 0, conversations: 0, workspaceItems: 0 };
     }
+    const scopeId = scopeRow.id;
 
-    const memoryIds = this.db.raw
-      .prepare(
-        'SELECT id FROM memories WHERE scope_id = ? AND created_at < ?'
-      )
-      .all(scopeRow.id, cutoff) as { id: number }[];
+    // Selection AND deletion run inside the same transaction so the
+    // reported counts always match what was actually deleted. If we
+    // SELECT outside the tx, concurrent writers can bump a row's
+    // updated_at (workspace_items) past the cutoff between the SELECT
+    // and the DELETE — the row would still be deleted (we have its id)
+    // even though it no longer qualifies as expired. Keeping both inside
+    // one tx eliminates that window. For workspace_items we additionally
+    // re-gate the DELETE on `updated_at < cutoff` so a row touched
+    // mid-transaction is left alone.
+    //
+    // Nested better-sqlite3 transactions (forget/delete each open their
+    // own) degrade to savepoints under this outer transaction, so
+    // routing through the domain modules is safe and keeps sqlite-vec
+    // rows cleaned up alongside the SQL rows. FTS rows are handled by
+    // triggers.
+    const sweep = this.db.raw.transaction((applyDeletes: boolean): PrunedCounts => {
+      const memoryIds = this.db.raw
+        .prepare('SELECT id FROM memories WHERE scope_id = ? AND created_at < ?')
+        .all(scopeId, cutoff) as { id: number }[];
+      const documentIds = this.db.raw
+        .prepare('SELECT id FROM documents WHERE scope_id = ? AND ingested_at < ?')
+        .all(scopeId, cutoff) as { id: number }[];
+      const conversationIds = this.db.raw
+        .prepare('SELECT id FROM conversations WHERE scope_id = ? AND started_at < ?')
+        .all(scopeId, cutoff) as { id: number }[];
+      const workspaceItemIds = this.db.raw
+        .prepare(
+          `SELECT wi.id FROM workspace_items wi
+           JOIN workspaces w ON w.id = wi.workspace_id
+           WHERE w.scope_id = ? AND wi.updated_at < ?`
+        )
+        .all(scopeId, cutoff) as { id: number }[];
 
-    const documentIds = this.db.raw
-      .prepare(
-        'SELECT id FROM documents WHERE scope_id = ? AND ingested_at < ?'
-      )
-      .all(scopeRow.id, cutoff) as { id: number }[];
+      const innerCounts: PrunedCounts = {
+        memories: memoryIds.length,
+        documents: documentIds.length,
+        conversations: conversationIds.length,
+        workspaceItems: workspaceItemIds.length,
+      };
 
-    const conversationIds = this.db.raw
-      .prepare(
-        'SELECT id FROM conversations WHERE scope_id = ? AND started_at < ?'
-      )
-      .all(scopeRow.id, cutoff) as { id: number }[];
-
-    // Workspace items: `updated_at` is the truth. Items live under workspaces
-    // scoped elsewhere, so we filter by the owning workspace's scope_id.
-    const workspaceItemIds = this.db.raw
-      .prepare(
-        `SELECT wi.id FROM workspace_items wi
-         JOIN workspaces w ON w.id = wi.workspace_id
-         WHERE w.scope_id = ? AND wi.updated_at < ?`
-      )
-      .all(scopeRow.id, cutoff) as { id: number }[];
-
-    const counts: PrunedCounts = {
-      memories: memoryIds.length,
-      documents: documentIds.length,
-      conversations: conversationIds.length,
-      workspaceItems: workspaceItemIds.length,
-    };
-
-    if (!dryRun) {
-      // Route deletes through the domain modules so sqlite-vec rows are
-      // cleaned up alongside SQL rows. FTS rows are handled by triggers.
-      for (const { id } of memoryIds) this.memories.forget(id);
-      for (const { id } of documentIds) this.documents.delete(id);
-      for (const { id } of conversationIds) this.conversations.delete(id);
-      if (workspaceItemIds.length > 0) {
-        const del = this.db.raw.prepare('DELETE FROM workspace_items WHERE id = ?');
-        const tx = this.db.raw.transaction((ids: number[]) => {
-          for (const id of ids) del.run(id);
-        });
-        tx(workspaceItemIds.map((r) => r.id));
+      if (applyDeletes) {
+        const delItem = this.db.raw.prepare(
+          'DELETE FROM workspace_items WHERE id = ? AND updated_at < ?'
+        );
+        for (const { id } of memoryIds) this.memories.forget(id);
+        for (const { id } of documentIds) this.documents.delete(id);
+        for (const { id } of conversationIds) this.conversations.delete(id);
+        for (const { id } of workspaceItemIds) delItem.run(id, cutoff);
       }
-    }
+      return innerCounts;
+    });
 
-    return counts;
+    return sweep(!dryRun);
   }
 
   private resolveScope(
