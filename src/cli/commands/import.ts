@@ -25,12 +25,19 @@ const SUBCOMMANDS: Array<{ kind: ImporterKind; alias?: string }> = [
  * Parse a file and stamp a stable `externalId` on any conversation that
  * lacks one, so re-importing the same file is idempotent (conversations
  * dedupe on UNIQUE(source, external_id)). Importers that already extract a
- * session id keep it; formats without one fall back to the file path.
+ * session id keep it; formats without one fall back to `<path>#<index>`.
+ *
+ * The index suffix matters: the Gemini Takeout importer and the documented
+ * generic array shape can return MULTIPLE conversations per file without
+ * externalIds. Using the bare path as fallback would collapse all of them
+ * to the same `(source, external_id)` key — only the first conversation
+ * would be inserted and the rest counted as skipped. The index is stable
+ * across re-imports because the importers parse in deterministic order.
  */
 function parseFile(kind: ImporterKind, path: string): ImportedConversation[] {
   const raw = readFileSync(path, 'utf8');
   const convs = resolveImporter(kind).parse(raw);
-  return convs.map((c) => (c.externalId ? c : { ...c, externalId: path }));
+  return convs.map((c, i) => (c.externalId ? c : { ...c, externalId: `${path}#${i}` }));
 }
 
 export interface ImportAutoOptions extends CommonCliOptions {
