@@ -57,7 +57,7 @@ dcx import codex ~/.codex/sessions/2024/06/01/rollout-*.jsonl
 
 Cursor stores chat in a SQLite state DB rather than JSONL, so there's no
 auto-discovery importer yet. Export a thread to JSON and use the generic
-importer in the meantime:
+importer for now:
 
 ```bash
 dcx import generic cursor-thread.json --scope work

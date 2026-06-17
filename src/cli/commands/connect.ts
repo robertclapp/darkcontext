@@ -35,6 +35,19 @@ export async function runConnect(
     throw new ValidationError('scopes', 'at least one non-empty scope is required');
   }
   const toolName = (opts.name ?? client).trim();
+  // Validate early: `--name ""` would otherwise become an empty
+  // mcpServers key in the generated config, and anything outside
+  // `[A-Za-z0-9_-]` would break the Codex TOML `[mcp_servers.<name>]`
+  // table header (TOML bare keys are restricted to that alphabet).
+  if (toolName.length === 0) {
+    throw new ValidationError('name', 'must not be empty');
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(toolName)) {
+    throw new ValidationError(
+      'name',
+      `must contain only letters, numbers, '_' or '-', got '${toolName}'`
+    );
+  }
 
   await withAppContext(opts, (ctx) => {
     const { token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false });
@@ -105,6 +118,7 @@ export function registerConnect(program: Command): void {
     .option('--scopes <scopes>', 'comma-separated scopes (default: shared)', 'shared')
     .option('--read-only', 'grant read-only access to the scopes', false)
     .option('--db <path>', 'override database path')
+    .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .action(async (client: string, opts: ConnectOptions) => {
       await runConnect(client, opts);
     });

@@ -62,6 +62,21 @@ describe('CodexImporter', () => {
     expect(imp.parse(JSON.stringify({ type: 'session_meta', payload: { id: 'x' } }))).toEqual([]);
   });
 
+  it('does not take sessionId from non-session_meta lines that happen to carry an id', () => {
+    // Anthropic-style response shapes can put a top-level `id` on a plain
+    // message event. The `!sessionId` first-match guard means such a line
+    // would clobber the real session_meta id and corrupt the dedup key
+    // unless the condition is gated to session_meta lines specifically.
+    const raw = [
+      JSON.stringify({ type: 'message', id: 'msg-1', role: 'user', content: 'hello' }),
+      JSON.stringify({ type: 'session_meta', payload: { id: 'codex-real' } }),
+      JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'world' } }),
+    ].join('\n');
+    const convs = imp.parse(raw);
+    expect(convs).toHaveLength(1);
+    expect(convs[0]!.externalId).toBe('codex-real');
+  });
+
   it('is resolvable by kind "codex"', () => {
     expect(resolveImporter('codex').source).toBe('codex');
   });
