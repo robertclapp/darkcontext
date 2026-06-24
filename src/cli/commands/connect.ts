@@ -58,6 +58,13 @@ export async function runConnect(
 
     let token: string;
     let rotated = false;
+    // What the success line reports. For a fresh create these mirror the
+    // CLI inputs, but on the rotate-existing branch they MUST be sourced
+    // from the tool's real grants: rotateToken only mints a new secret and
+    // leaves scopes / read-only untouched, so echoing --scopes/--read-only
+    // there would advertise a boundary the token doesn't actually have.
+    let effectiveScopes = scopes;
+    let effectiveReadOnly = opts.readOnly ?? false;
     if (opts.rotate) {
       // --rotate: keep existing scope grants, just mint a new token.
       // If the tool doesn't exist yet, fall through to create() so
@@ -66,6 +73,10 @@ export async function runConnect(
       if (existing) {
         token = ctx.tools.rotateToken(toolName);
         rotated = true;
+        const grants = ctx.tools.grantsFor(existing.id);
+        effectiveScopes = grants.map((g) => g.scope);
+        // A tool is read-only when no grant carries write access.
+        effectiveReadOnly = grants.length > 0 && grants.every((g) => !g.canWrite);
       } else {
         ({ token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false }));
       }
@@ -88,9 +99,15 @@ export async function runConnect(
       }
     }
 
-    const readOnlyTag = opts.readOnly ? ' (read-only)' : '';
+    const readOnlyTag = effectiveReadOnly ? ' (read-only)' : '';
     const verb = rotated ? 'Rotated token for' : 'Provisioned';
-    out(`${verb} '${toolName}' for ${client} — scopes: ${scopes.join(', ')}${readOnlyTag}`);
+    out(`${verb} '${toolName}' for ${client} — scopes: ${effectiveScopes.join(', ')}${readOnlyTag}`);
+    if (rotated) {
+      // Rotation only mints a new secret; it never alters grants. Say so,
+      // so a user who passed --scopes/--read-only understands why the line
+      // above reflects the tool's existing boundary, not their flags.
+      out('  (rotation preserves the existing scopes/read-only; flags do not change grants)');
+    }
     out('');
     out(renderClientConfig(client, toolName, token, serveArgs));
     out('');

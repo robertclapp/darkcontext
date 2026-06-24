@@ -249,4 +249,32 @@ describe('CLI actions (direct invocation)', () => {
       runConnect('emacs', { db: dbPath, scopes: 'shared' }, () => undefined)
     ).rejects.toThrow(/unknown client/);
   });
+
+  it('runConnect --rotate reports the tool\'s real grants, not the passed flags', async () => {
+    // Provision read-write on `shared`.
+    await runConnect('cursor', { db: dbPath, scopes: 'shared' }, () => undefined);
+    // Rotate with conflicting flags: rotation keeps grants, so the output
+    // must advertise the ACTUAL boundary (shared, read-write), never the
+    // misleading `acme (read-only)` the flags would suggest.
+    const cap = capture();
+    await runConnect(
+      'cursor',
+      { db: dbPath, scopes: 'acme', readOnly: true, rotate: true },
+      cap.write
+    );
+    const text = cap.lines.join('\n');
+    expect(text).toMatch(/Rotated token for 'cursor'/);
+    expect(text).toContain('scopes: shared');
+    expect(text).not.toContain('acme');
+    expect(text).not.toContain('(read-only)');
+  });
+
+  it('runConnect --rotate provisions on first use when the tool is absent', async () => {
+    const cap = capture();
+    await runConnect('codex', { db: dbPath, scopes: 'shared', rotate: true }, cap.write);
+    // No pre-existing tool → falls through to create(), so it's a fresh
+    // provision (not a rotation) and honors the passed scopes.
+    expect(cap.lines.join('\n')).toMatch(/Provisioned 'codex' for codex/);
+    expect(cap.lines.join('\n')).toContain('scopes: shared');
+  });
 });
