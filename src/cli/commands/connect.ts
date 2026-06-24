@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 
 import type { CommonCliOptions } from '../context.js';
 import { withAppContext } from '../context.js';
-import { ValidationError } from '../../core/errors.js';
+import { ConflictError, ValidationError } from '../../core/errors.js';
 
 /**
  * `dcx connect <client>` — one step from "installed" to "this agent shares
@@ -20,6 +20,8 @@ export interface ConnectOptions extends CommonCliOptions {
   name?: string;
   scopes: string;
   readOnly?: boolean;
+  /** Tool with this name already exists → rotate its token instead of erroring. */
+  rotate?: boolean;
 }
 
 export async function runConnect(
@@ -35,37 +37,64 @@ export async function runConnect(
     throw new ValidationError('scopes', 'at least one non-empty scope is required');
   }
   const toolName = (opts.name ?? client).trim();
-  // Validate early: `--name ""` would otherwise become an empty
-  // mcpServers key in the generated config, and anything outside
-  // `[A-Za-z0-9_-]` would break the Codex TOML `[mcp_servers.<name>]`
-  // table header (TOML bare keys are restricted to that alphabet).
-  if (toolName.length === 0) {
-    throw new ValidationError('name', 'must not be empty');
-  }
-  if (!/^[A-Za-z0-9_-]+$/.test(toolName)) {
-    throw new ValidationError(
-      'name',
-      `must contain only letters, numbers, '_' or '-', got '${toolName}'`
-    );
-  }
+  // Validate empty / whitespace `--db` and `--provider` explicitly. With a
+  // bare truthy check `--db ""` would silently drop the flag from the
+  // generated `dcx serve` command — the user would get a config that
+  // launches the server with the default DB / provider, not the one they
+  // typed. Matches the empty-string rejection added across the rest of
+  // the CLI family (export/prune/summarize/sync).
+  const db = opts.db !== undefined ? opts.db.trim() : undefined;
+  if (db === '') throw new ValidationError('db', '--db must be a non-empty path');
+  const provider = opts.provider !== undefined ? opts.provider.trim() : undefined;
+  if (provider === '') throw new ValidationError('provider', '--provider must be a non-empty string');
+  // Charset validation (`^[A-Za-z0-9_-]+$`) is enforced inside
+  // `Tools.create()` so every persistence path is protected uniformly —
+  // not just this one CLI command.
 
   await withAppContext(opts, (ctx) => {
-    const { token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false });
-    // Forward the same overrides the user passed to `connect` into the
-    // generated `dcx serve` command. Without this, `dcx connect …
-    // --provider onnx` prints a config that launches the server with
-    // the default embeddings provider — a silent mismatch the user
-    // would only notice later via wrong recall results.
     const serveArgs: string[] = ['serve'];
-    if (opts.db) serveArgs.push('--db', opts.db);
-    if (opts.provider) serveArgs.push('--provider', opts.provider);
+    if (db !== undefined) serveArgs.push('--db', db);
+    if (provider !== undefined) serveArgs.push('--provider', provider);
+
+    let token: string;
+    let rotated = false;
+    if (opts.rotate) {
+      // --rotate: keep existing scope grants, just mint a new token.
+      // If the tool doesn't exist yet, fall through to create() so
+      // `--rotate` is idempotent for first-time setup.
+      const existing = ctx.tools.findByName(toolName);
+      if (existing) {
+        token = ctx.tools.rotateToken(toolName);
+        rotated = true;
+      } else {
+        ({ token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false }));
+      }
+    } else {
+      try {
+        ({ token } = ctx.tools.create({ name: toolName, scopes, readOnly: opts.readOnly ?? false }));
+      } catch (err) {
+        // Translate the raw ConflictError into actionable guidance.
+        // Without this, a re-run of `dcx connect <client>` (after the
+        // token-shown-once has been lost) surfaces a generic conflict
+        // error with no recovery path.
+        if (err instanceof ConflictError) {
+          throw new ValidationError(
+            'name',
+            `a tool named '${toolName}' already exists. ` +
+              `Pass --rotate to mint a new token for it, or --name <other> to provision a second identity.`
+          );
+        }
+        throw err;
+      }
+    }
 
     const readOnlyTag = opts.readOnly ? ' (read-only)' : '';
-    out(`Provisioned '${toolName}' for ${client} — scopes: ${scopes.join(', ')}${readOnlyTag}`);
+    const verb = rotated ? 'Rotated token for' : 'Provisioned';
+    out(`${verb} '${toolName}' for ${client} — scopes: ${scopes.join(', ')}${readOnlyTag}`);
     out('');
     out(renderClientConfig(client, toolName, token, serveArgs));
     out('');
-    out('The token is shown once. Re-run with `--name` to provision another client against the same shared scope.');
+    out('The token is shown once. Re-run with `--rotate` to mint a new one for this name, or `--name <other>` to provision a second identity.');
   });
 }
 
@@ -117,6 +146,7 @@ export function registerConnect(program: Command): void {
     .option('--name <name>', 'tool identity name (default: the client name)')
     .option('--scopes <scopes>', 'comma-separated scopes (default: shared)', 'shared')
     .option('--read-only', 'grant read-only access to the scopes', false)
+    .option('--rotate', 'if the named tool already exists, mint a new token instead of erroring', false)
     .option('--db <path>', 'override database path')
     .option('--provider <name>', 'embeddings provider: stub | ollama | onnx')
     .action(async (client: string, opts: ConnectOptions) => {

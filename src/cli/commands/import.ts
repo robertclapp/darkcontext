@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -25,19 +26,36 @@ const SUBCOMMANDS: Array<{ kind: ImporterKind; alias?: string }> = [
  * Parse a file and stamp a stable `externalId` on any conversation that
  * lacks one, so re-importing the same file is idempotent (conversations
  * dedupe on UNIQUE(source, external_id)). Importers that already extract a
- * session id keep it; formats without one fall back to `<path>#<index>`.
+ * session id keep it; formats without one fall back to a sha256 fingerprint
+ * of the conversation's title + start time + messages.
  *
- * The index suffix matters: the Gemini Takeout importer and the documented
- * generic array shape can return MULTIPLE conversations per file without
- * externalIds. Using the bare path as fallback would collapse all of them
- * to the same `(source, external_id)` key — only the first conversation
- * would be inserted and the rest counted as skipped. The index is stable
- * across re-imports because the importers parse in deterministic order.
+ * The fingerprint matters in two ways. (1) The Gemini Takeout importer and
+ * the documented generic array shape can return MULTIPLE conversations per
+ * file without externalIds — a bare-path fallback would collapse all of
+ * them to the same `(source, external_id)` key and only the first would
+ * insert. (2) A path-based fallback also breaks re-imports across moves:
+ * the same export copied to a different absolute path (mounted volume,
+ * synced backup, second machine) would re-insert every conversation as new.
+ * Content-hashing makes the key location-independent so the dedupe contract
+ * survives the file moving.
  */
 function parseFile(kind: ImporterKind, path: string): ImportedConversation[] {
   const raw = readFileSync(path, 'utf8');
   const convs = resolveImporter(kind).parse(raw);
-  return convs.map((c, i) => (c.externalId ? c : { ...c, externalId: `${path}#${i}` }));
+  return convs.map((c) => {
+    if (c.externalId) return c;
+    const fp = createHash('sha256')
+      .update(
+        JSON.stringify({
+          t: c.title,
+          s: c.startedAt,
+          m: c.messages.map((m) => [m.role, m.content, m.ts]),
+        })
+      )
+      .digest('hex')
+      .slice(0, 16);
+    return { ...c, externalId: `sha256:${fp}` };
+  });
 }
 
 export interface ImportAutoOptions extends CommonCliOptions {
@@ -121,9 +139,15 @@ export async function runImportAuto(
       }
       anyFound = true;
       const totals = await ingestFiles(ctx, kind, files, opts.scope, out);
+      // Append a `, N unreadable` clause to the summary only when at least
+      // one file failed to parse — otherwise the line says nothing about
+      // parse errors and matches the original happy-path format. The
+      // per-file warnings still print above, so the operator gets both an
+      // immediate signal and a roll-up tally.
+      const unreadable = totals.parseErrors > 0 ? `, ${totals.parseErrors} unreadable` : '';
       out(
         `${kind}: ${files.length} files → ${totals.inserted} new conversations, ` +
-          `${totals.messages} messages (${totals.skipped} already present)`
+          `${totals.messages} messages (${totals.skipped} already present${unreadable})`
       );
     }
     if (!anyFound) {
@@ -138,8 +162,8 @@ async function ingestFiles(
   files: string[],
   scope: string | undefined,
   out: (line: string) => void
-): Promise<{ inserted: number; messages: number; skipped: number }> {
-  const totals = { inserted: 0, messages: 0, skipped: 0 };
+): Promise<{ inserted: number; messages: number; skipped: number; parseErrors: number }> {
+  const totals = { inserted: 0, messages: 0, skipped: 0, parseErrors: 0 };
   for (const file of files) {
     let parsed: ImportedConversation[];
     try {
@@ -148,8 +172,11 @@ async function ingestFiles(
       // One unreadable session shouldn't abort the whole sweep, but a
       // silent skip in a cron run could leave sessions unimported
       // forever — surface a warning line so the operator can see why
-      // their counts don't match what's on disk.
+      // their counts don't match what's on disk, and tally it so the
+      // per-source summary reports the gap too (warnings can scroll off
+      // in long runs; the roll-up survives).
       out(`  warning: skipped ${file} (${err instanceof Error ? err.message : String(err)})`);
+      totals.parseErrors += 1;
       continue;
     }
     if (parsed.length === 0) continue;

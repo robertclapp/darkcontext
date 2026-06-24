@@ -26,11 +26,25 @@ export class Tools {
   }
 
   create(input: NewToolInput): ProvisionedTool {
-    if (!input.name.trim()) throw new ValidationError('name', 'tool name is required');
+    const name = input.name.trim();
+    if (!name) throw new ValidationError('name', 'tool name is required');
+    // Tool names are used as raw mcpServers JSON keys and — for the
+    // Codex client — as TOML bare table headers (`[mcp_servers.<name>]`).
+    // TOML bare keys are restricted to `[A-Za-z0-9_-]`, so enforcing the
+    // same alphabet here guarantees that EVERY renderer can embed the
+    // name without quoting, regardless of which CLI surface created it.
+    // The check lives at the persistence layer so a future caller can't
+    // route around it.
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      throw new ValidationError(
+        'name',
+        `must contain only letters, numbers, '_' or '-', got '${input.name}'`
+      );
+    }
     if (input.scopes.length === 0) throw new ValidationError('scopes', 'at least one scope is required');
 
-    const existing = this.findByName(input.name);
-    if (existing) throw new ConflictError('tool', input.name);
+    const existing = this.findByName(name);
+    if (existing) throw new ConflictError('tool', name);
 
     const token = generateToken();
     const tokenHash = hashToken(token);
@@ -39,7 +53,7 @@ export class Tools {
     const tx = this.db.raw.transaction(() => {
       const info = this.db.raw
         .prepare('INSERT INTO tools (name, token_hash, created_at) VALUES (?, ?, ?)')
-        .run(input.name, tokenHash, now);
+        .run(name, tokenHash, now);
       const toolId = Number(info.lastInsertRowid);
 
       for (const scopeName of input.scopes) {

@@ -44,11 +44,18 @@ export class ClaudeCodeImporter implements Importer {
     }
 
     if (messages.length === 0) return [];
+    // JSONL lines are produced in append order, but a transcript can be
+    // resumed across sessions or rewritten with out-of-order timestamps
+    // (e.g. a tool-summary inserted retroactively), so take the min ts
+    // explicitly rather than trust messages[0]. `reduce` instead of
+    // `Math.min(...spread)` to stay safe on very long transcripts where
+    // the spread would blow the argument-count limit.
+    const startedAt = messages.reduce((m, x) => (x.ts < m ? x.ts : m), messages[0]!.ts);
     return [
       {
         ...(sessionId ? { externalId: sessionId } : {}),
         title: deriveTitle(firstUserText, sessionId ? `Claude Code ${sessionId.slice(0, 8)}` : 'Claude Code session'),
-        startedAt: messages[0]!.ts,
+        startedAt,
         messages,
       },
     ];

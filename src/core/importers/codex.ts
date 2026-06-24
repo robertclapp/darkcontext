@@ -61,11 +61,18 @@ export class CodexImporter implements Importer {
     }
 
     if (messages.length === 0) return [];
+    // JSONL append order isn't guaranteed to be chronological — Codex
+    // rollouts can interleave a session_meta line with a later timestamp
+    // ahead of an earlier message event. Use the actual min ts so
+    // history-search "newest first" sorts and time-bounded queries get a
+    // truthful start. `reduce` instead of `Math.min(...spread)` to avoid
+    // the argument-count limit on long rollouts.
+    const startedAt = messages.reduce((m, x) => (x.ts < m ? x.ts : m), messages[0]!.ts);
     return [
       {
         ...(sessionId ? { externalId: sessionId } : {}),
         title: deriveTitle(firstUserText, sessionId ? `Codex ${sessionId.slice(0, 8)}` : 'Codex session'),
-        startedAt: messages[0]!.ts,
+        startedAt,
         messages,
       },
     ];
