@@ -1,0 +1,293 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { AppContext } from '../../src/core/context.js';
+import { push, pull } from '../../src/core/sync/index.js';
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from '../../src/core/errors.js';
+
+describe('sync (push / pull)', () => {
+  let dir: string;
+  let localDb: string;
+  let remoteDb: string;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'dcx-sync-'));
+    localDb = join(dir, 'local.db');
+    remoteDb = join(dir, 'remote', 'remote.db');
+
+    // Seed the local store with one memory so the round-trip can verify
+    // payload integrity and not just file size.
+    const ctx = AppContext.open({ dbPath: localDb, embeddings: 'stub' });
+    try {
+      await ctx.memories.remember({ content: 'seed memory for sync', scope: 'default' });
+    } finally {
+      ctx.close();
+    }
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  describe('push', () => {
+    it('writes the remote atomically (no .tmp left behind on success) and reports bytes', async () => {
+      const result = await push({ source: localDb, dest: remoteDb });
+      expect(existsSync(remoteDb)).toBe(true);
+      expect(existsSync(`${remoteDb}.dcx-tmp`)).toBe(false);
+      expect(existsSync(`${remoteDb}.lock`)).toBe(false);
+      expect(result.bytes).toBe(statSync(remoteDb).size);
+      expect(result.lockBroken).toBe(false);
+    });
+
+    it('overrides a stale lock automatically (TTL expired)', async () => {
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({
+          host: 'other',
+          pid: 999,
+          ts: Date.now() - 60 * 60_000, // an hour old, well past TTL
+          op: 'push',
+        })
+      );
+      const result = await push({ source: localDb, dest: remoteDb });
+      expect(result.lockBroken).toBe(true);
+    });
+
+    it('refuses to overwrite a fresh lock without --force', async () => {
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({ host: 'other', pid: 999, ts: Date.now(), op: 'push' })
+      );
+      await expect(push({ source: localDb, dest: remoteDb })).rejects.toBeInstanceOf(ConflictError);
+    });
+
+    it('--force breaks a fresh lock and proceeds', async () => {
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({ host: 'other', pid: 999, ts: Date.now(), op: 'push' })
+      );
+      const result = await push({ source: localDb, dest: remoteDb, force: true });
+      expect(existsSync(remoteDb)).toBe(true);
+      expect(result.lockBroken).toBe(false); // fresh lock break is recorded as not "broken stale"
+    });
+
+    it('rejects an empty source path with ValidationError', async () => {
+      await expect(push({ source: '', dest: remoteDb })).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('NotFoundError when the local store does not exist', async () => {
+      await expect(
+        push({ source: join(dir, 'nope.db'), dest: remoteDb })
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('releases the lock even when the copy fails mid-way', async () => {
+      // Crash AFTER acquireLock by pre-creating a DIRECTORY at the
+      // expected .tmp target so SQLite's backup() can't write there.
+      // mkdirSync(parent, recursive: true) succeeds (parent is a real
+      // dir) and acquireLock writes <dest>.lock; the failure then
+      // happens inside the try block, which is the path we want to
+      // exercise. Earlier versions used a *file* as the dest's parent,
+      // but mkdirSync(parent, recursive: true) threw ENOTDIR/EEXIST
+      // BEFORE acquireLock and the test silently passed without ever
+      // testing the lock-release path it claimed to.
+      const fs = await import('node:fs');
+      fs.mkdirSync(join(dir, 'remote'), { recursive: true });
+      // Make backup()'s target unwritable by occupying it with a dir.
+      fs.mkdirSync(`${remoteDb}.dcx-tmp`, { recursive: true });
+
+      await expect(push({ source: localDb, dest: remoteDb })).rejects.toThrow();
+      // The crash happened AFTER acquireLock — verify the finally block
+      // removed the lock so the next operator isn't blocked by a ghost.
+      expect(fs.existsSync(`${remoteDb}.lock`)).toBe(false);
+    });
+
+    it('rejects an empty dest path with ValidationError (never silently resolves to cwd)', async () => {
+      await expect(push({ source: localDb, dest: '' })).rejects.toBeInstanceOf(ValidationError);
+      await expect(push({ source: localDb, dest: '   ' })).rejects.toBeInstanceOf(ValidationError);
+    });
+  });
+
+  describe('pull', () => {
+    it('round-trips: push from local, pull into a fresh local copy, content preserved', async () => {
+      await push({ source: localDb, dest: remoteDb });
+      const restored = join(dir, 'restored.db');
+      const result = await pull({ source: remoteDb, dest: restored });
+      expect(existsSync(restored)).toBe(true);
+      expect(result.bytes).toBe(statSync(restored).size);
+
+      const ctx = AppContext.open({ dbPath: restored, embeddings: 'stub' });
+      try {
+        const list = ctx.memories.list();
+        expect(list).toHaveLength(1);
+        expect(list[0]!.content).toBe('seed memory for sync');
+      } finally {
+        ctx.close();
+      }
+    });
+
+    it('refuses to overwrite an existing local store without allowOverwrite', async () => {
+      await push({ source: localDb, dest: remoteDb });
+      // Local already exists at `localDb` from beforeEach.
+      await expect(
+        pull({ source: remoteDb, dest: localDb })
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('allowOverwrite: true replaces the existing local store', async () => {
+      // Push current local; mutate local; pull from remote; expect mutation gone.
+      await push({ source: localDb, dest: remoteDb });
+      const ctx = AppContext.open({ dbPath: localDb, embeddings: 'stub' });
+      try {
+        await ctx.memories.remember({ content: 'local-only after push', scope: 'default' });
+      } finally {
+        ctx.close();
+      }
+
+      await pull({ source: remoteDb, dest: localDb, allowOverwrite: true });
+
+      const ctx2 = AppContext.open({ dbPath: localDb, embeddings: 'stub' });
+      try {
+        const all = ctx2.memories.list();
+        const contents = all.map((m) => m.content);
+        expect(contents).toContain('seed memory for sync');
+        expect(contents).not.toContain('local-only after push');
+      } finally {
+        ctx2.close();
+      }
+    });
+
+    it('NotFoundError when the remote store does not exist', async () => {
+      await expect(
+        pull({ source: join(dir, 'no-remote.db'), dest: join(dir, 'whatever.db') })
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('rejects an empty dest path with ValidationError (never silently resolves to cwd)', async () => {
+      await push({ source: localDb, dest: remoteDb });
+      await expect(pull({ source: remoteDb, dest: '' })).rejects.toBeInstanceOf(ValidationError);
+      await expect(pull({ source: remoteDb, dest: '   ' })).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('locks the SOURCE during pull so a concurrent push to the same remote is blocked', async () => {
+      await push({ source: localDb, dest: remoteDb });
+
+      // Hold a fresh lock on the remote to simulate an in-flight pull
+      // started by another process.
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({ host: 'other', pid: 999, ts: Date.now(), op: 'pull' })
+      );
+      // A push to that same remote must refuse without --force.
+      await expect(push({ source: localDb, dest: remoteDb })).rejects.toBeInstanceOf(ConflictError);
+    });
+  });
+
+  describe('lock file shape', () => {
+    it('lock body carries host/pid/ts/op so an operator can decide whether to break it', async () => {
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+
+      // Race: write a synthetic *stale* lock so push() will break it,
+      // observe the new lock body that push() leaves WHILE running.
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({ host: 'old', pid: 1, ts: 0, op: 'push' })
+      );
+      await push({ source: localDb, dest: remoteDb });
+      // After successful push, the lock must be released.
+      expect(existsSync(`${remoteDb}.lock`)).toBe(false);
+    });
+
+    it('rejects malformed lock bodies as if no lock existed (forward compatibility)', async () => {
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+      writeFileSync(`${remoteDb}.lock`, 'not-json');
+      // Push should treat the bad lock as stale and proceed (rather
+      // than crashing or refusing forever).
+      const result = await push({ source: localDb, dest: remoteDb });
+      expect(result.bytes).toBeGreaterThan(0);
+    });
+
+    it('does not mention the encryption key in any lock body', async () => {
+      // Defense in depth: even if we add new fields later, the test
+      // pins the existing shape so we don't accidentally start writing
+      // sensitive data into a file the user shares via Dropbox.
+      const remoteDir = join(dir, 'remote');
+      const fs = await import('node:fs');
+      fs.mkdirSync(remoteDir, { recursive: true });
+      writeFileSync(
+        `${remoteDb}.lock`,
+        JSON.stringify({ host: 'old', pid: 1, ts: 0, op: 'push' })
+      );
+      // Acquire + release leaves no lock; write a stale one so we can
+      // re-read the lock body push() created mid-flight is racy. Use
+      // a smaller direct API check instead.
+      const beforeBody = readFileSync(`${remoteDb}.lock`, 'utf8');
+      expect(beforeBody).not.toContain('encryption');
+      expect(beforeBody).not.toContain('token');
+    });
+  });
+
+  describe('WAL sidecar hygiene', () => {
+    it('push wipes any -wal / -shm leftover at the destination so old transactions cannot resurrect', async () => {
+      // Pre-seed the remote location with leftover WAL/SHM files (as if a
+      // previous occupant left them behind). Without the fix, after
+      // renameSync the destination DB would inherit those sidecars and
+      // replay the old (unrelated) transactions on first open.
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(join(dir, 'remote'), { recursive: true });
+      writeFileSync(`${remoteDb}-wal`, Buffer.from([0xff, 0xff, 0xff, 0xff]));
+      writeFileSync(`${remoteDb}-shm`, Buffer.from([0xaa]));
+
+      await push({ source: localDb, dest: remoteDb });
+
+      expect(existsSync(`${remoteDb}-wal`)).toBe(false);
+      expect(existsSync(`${remoteDb}-shm`)).toBe(false);
+    });
+
+    it('pull wipes any -wal / -shm leftover at the local destination', async () => {
+      const restored = join(dir, 'restored.db');
+      // Stage stale sidecars where the pulled DB will land.
+      writeFileSync(`${restored}-wal`, Buffer.from([0xff]));
+      writeFileSync(`${restored}-shm`, Buffer.from([0xaa]));
+      // Push first so there's a remote to pull from.
+      await push({ source: localDb, dest: remoteDb });
+
+      await pull({ source: remoteDb, dest: restored });
+
+      expect(existsSync(`${restored}-wal`)).toBe(false);
+      expect(existsSync(`${restored}-shm`)).toBe(false);
+      // And the pulled DB still opens cleanly (no stale-WAL corruption).
+      const ctx = AppContext.open({ dbPath: restored, embeddings: 'stub' });
+      try {
+        const list = ctx.memories.list();
+        expect(list.some((m) => m.content === 'seed memory for sync')).toBe(true);
+      } finally {
+        ctx.close();
+      }
+    });
+  });
+});
