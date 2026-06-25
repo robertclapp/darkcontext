@@ -33,10 +33,15 @@ That's the whole product surface for sync.
   and overridden automatically (assumed-dead writer). For fresh locks,
   use `--force` if you're sure the recorded process is dead. The lock
   body is `{ host, pid, ts, op }` so you can decide.
-- **Encryption-at-rest is preserved.** SQLite's backup API copies the
-  on-disk pages verbatim; an SQLCipher-encrypted source produces an
-  encrypted destination usable by anyone with the same
-  `DARKCONTEXT_ENCRYPTION_KEY`.
+- **Encryption-at-rest does NOT survive a sync today.** `dcx push` /
+  `dcx pull` open the source DB with its key (so reads decrypt
+  correctly), but `better-sqlite3`'s `backup()` API has no
+  destination-key option — the page copy lands as plaintext on the
+  remote and on any pulled destination. If you set
+  `DARKCONTEXT_ENCRYPTION_KEY`, treat the synced file as confidential
+  data leaving your encrypted-at-rest perimeter; layer transport
+  encryption (Syncthing folder password, encrypted volume, SSH) on top.
+  A keyed-destination follow-up is tracked in `Follow-ups`.
 
 ## What sync does NOT do
 

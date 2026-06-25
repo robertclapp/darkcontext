@@ -250,4 +250,44 @@ describe('sync (push / pull)', () => {
       expect(beforeBody).not.toContain('token');
     });
   });
+
+  describe('WAL sidecar hygiene', () => {
+    it('push wipes any -wal / -shm leftover at the destination so old transactions cannot resurrect', async () => {
+      // Pre-seed the remote location with leftover WAL/SHM files (as if a
+      // previous occupant left them behind). Without the fix, after
+      // renameSync the destination DB would inherit those sidecars and
+      // replay the old (unrelated) transactions on first open.
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(join(dir, 'remote'), { recursive: true });
+      writeFileSync(`${remoteDb}-wal`, Buffer.from([0xff, 0xff, 0xff, 0xff]));
+      writeFileSync(`${remoteDb}-shm`, Buffer.from([0xaa]));
+
+      await push({ source: localDb, dest: remoteDb });
+
+      expect(existsSync(`${remoteDb}-wal`)).toBe(false);
+      expect(existsSync(`${remoteDb}-shm`)).toBe(false);
+    });
+
+    it('pull wipes any -wal / -shm leftover at the local destination', async () => {
+      const restored = join(dir, 'restored.db');
+      // Stage stale sidecars where the pulled DB will land.
+      writeFileSync(`${restored}-wal`, Buffer.from([0xff]));
+      writeFileSync(`${restored}-shm`, Buffer.from([0xaa]));
+      // Push first so there's a remote to pull from.
+      await push({ source: localDb, dest: remoteDb });
+
+      await pull({ source: remoteDb, dest: restored });
+
+      expect(existsSync(`${restored}-wal`)).toBe(false);
+      expect(existsSync(`${restored}-shm`)).toBe(false);
+      // And the pulled DB still opens cleanly (no stale-WAL corruption).
+      const ctx = AppContext.open({ dbPath: restored, embeddings: 'stub' });
+      try {
+        const list = ctx.memories.list();
+        expect(list.some((m) => m.content === 'seed memory for sync')).toBe(true);
+      } finally {
+        ctx.close();
+      }
+    });
+  });
 });

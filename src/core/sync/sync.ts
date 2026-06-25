@@ -54,10 +54,10 @@ export interface SyncOptions {
    */
   dest: string;
   /**
-   * SQLCipher key passed through to `openDb`. Only relevant for the
-   * source side: SQLite's backup API writes the destination as a plain
-   * blob, which preserves encrypted-at-rest state when both sides use
-   * the same key.
+   * SQLCipher key passed through to `openDb` so the SOURCE can be opened
+   * and read. Note: better-sqlite3's `backup()` has no destination-key
+   * option, so the synced destination lands as plaintext — encryption
+   * at rest does NOT survive push/pull. See docs/SYNC.md.
    */
   encryptionKey?: string;
   /**
@@ -126,6 +126,14 @@ export async function push(opts: SyncOptions, now: number = opts.now ?? Date.now
     // written. A crashed push leaves the .tmp behind for the next run to
     // sweep but never partially overwrites the destination.
     renameSync(tmpPath, destPath);
+    // The destination might still have `-wal` / `-shm` sidecars from the
+    // PREVIOUS occupant. When SQLite later opens the new DB at destPath,
+    // it would treat those sidecars as the new DB's WAL and replay
+    // transactions from the OLD store on top of the freshly-pushed
+    // content — silently resurrecting old state. The backup-API output is
+    // a single file with no WAL, so any sidecar that exists at this point
+    // is a leftover. backup.ts uses the same defense.
+    clearWalSidecars(destPath);
 
     return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
   } finally {
@@ -183,6 +191,12 @@ export async function pull(
       remote.close();
     }
     renameSync(tmpPath, destPath);
+    // Wipe any leftover `-wal` / `-shm` at the destination — the renamed
+    // file is the entire backup, so any sidecar that survives the rename
+    // would be associated with the previous occupant and silently
+    // resurrect its uncommitted transactions on the next open. Same
+    // pattern backup.ts uses for the restore path.
+    clearWalSidecars(destPath);
 
     return { source: sourcePath, dest: destPath, bytes: statSync(destPath).size, lockBroken };
   } finally {
@@ -250,6 +264,20 @@ function readLock(p: string): LockBody | null {
 
 function cleanupTmp(p: string): void {
   if (existsSync(p)) rmSync(p, { force: true });
+}
+
+/**
+ * Delete any `<path>-wal` / `<path>-shm` files. SQLite's backup API
+ * produces a single self-contained file (no WAL), so an existing
+ * sidecar after a sync rename can only have come from the previous
+ * occupant of that path — and SQLite would treat it as the new DB's
+ * WAL and replay its uncommitted transactions on first open.
+ */
+function clearWalSidecars(dbPath: string): void {
+  for (const suffix of ['-wal', '-shm']) {
+    const sidecar = `${dbPath}${suffix}`;
+    if (existsSync(sidecar)) rmSync(sidecar, { force: true });
+  }
 }
 
 function resolveOrThrow(p: string, label: string): string {
