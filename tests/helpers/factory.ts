@@ -27,6 +27,7 @@ export interface Fixture {
   readonly conversations: AppContext['conversations'];
   readonly scopes: AppContext['scopes'];
   readonly tools: AppContext['tools'];
+  readonly summarize: AppContext['summarize'];
 }
 
 export function makeFixture(): Fixture {
@@ -46,5 +47,6 @@ export function makeFixture(): Fixture {
     get conversations() { return ctx.conversations; },
     get scopes() { return ctx.scopes; },
     get tools() { return ctx.tools; },
+    get summarize() { return ctx.summarize; },
   };
 }

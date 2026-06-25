@@ -59,4 +59,26 @@ describe('loadConfig', () => {
     expect(() => loadConfig({}, { DARKCONTEXT_DEDUP_DISTANCE: '-1' })).toThrow(ConfigError);
     expect(() => loadConfig({}, { DARKCONTEXT_DEDUP_DISTANCE: 'nope' })).toThrow(ConfigError);
   });
+
+  it('defaults llm to stub + llama3.2 and reads DARKCONTEXT_LLM / DARKCONTEXT_LLM_MODEL', () => {
+    const def = loadConfig({}, {});
+    expect(def.llm).toEqual({ kind: 'stub', model: 'llama3.2' });
+
+    const ollama = loadConfig({}, { DARKCONTEXT_LLM: 'ollama', DARKCONTEXT_LLM_MODEL: 'qwen2.5' });
+    expect(ollama.llm).toEqual({ kind: 'ollama', model: 'qwen2.5' });
+  });
+
+  it('rejects an unknown DARKCONTEXT_LLM provider with ConfigError', () => {
+    expect(() => loadConfig({}, { DARKCONTEXT_LLM: 'magic' })).toThrow(ConfigError);
+  });
+
+  it('rejects DARKCONTEXT_LLM_MODEL="" / whitespace at config load (not at first use)', () => {
+    // Empty / whitespace inputs are operator typos (e.g. shell expansion
+    // of an unset variable). Silently coercing them to `''` would either
+    // send an empty model name to Ollama (404) or attribute the summary
+    // to no model at all — fail loud at boot instead.
+    expect(() => loadConfig({}, { DARKCONTEXT_LLM_MODEL: '' })).toThrow(ConfigError);
+    expect(() => loadConfig({}, { DARKCONTEXT_LLM_MODEL: '   ' })).toThrow(ConfigError);
+    expect(() => loadConfig({ llm: { model: '' } })).toThrow(ConfigError);
+  });
 });
