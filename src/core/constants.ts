@@ -42,11 +42,13 @@ export const DEFAULT_CHUNK_SIZE = 1200;
  *  sentence of continuity without wasting embedding budget. */
 export const DEFAULT_CHUNK_OVERLAP = 150;
 
-/** When scope-filtering recall hits, how many raw results to fetch per
- *  requested hit so filtering still returns a full page in the common case.
- *  Higher = better recall when the query crosses scopes; costs O(k) at
- *  query time. */
-export const RECALL_OVERFETCH_RATIO = 4;
+/** Growth factor for adaptive vector-search widening (see
+ *  store/vectorSearch.ts). When a scope/source filter drops a whole
+ *  nearest-neighbour window, the candidate window is multiplied by this
+ *  each round until enough in-scope hits surface or the index is
+ *  exhausted. 4 keeps the round-trip count low (limit, 4×, 16×, …) while
+ *  reaching a full scan in a handful of steps. */
+export const RECALL_WIDEN_FACTOR = 4;
 
 /** Audit log: strings longer than this are redacted to a summary. Chosen to
  *  preserve enums / short labels (scope names, kinds, ids-as-strings) while

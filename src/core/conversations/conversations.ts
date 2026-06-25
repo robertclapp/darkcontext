@@ -3,6 +3,8 @@ import { VectorIndex } from '../store/vectorIndex.js';
 import { resolveScopeOrDefault } from '../store/scopeHelpers.js';
 import { buildFtsQuery, isFtsAvailable } from '../store/fts.js';
 import { cached } from '../store/preparedCache.js';
+import { inClause, widenedVectorSearch, type KnnCandidate } from '../store/vectorSearch.js';
+import { normalizeScopeList } from '../store/scopeList.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
@@ -161,11 +163,14 @@ export class Conversations {
 
   async search(query: string, opts: HistorySearchOptions = {}): Promise<HistoryHit[]> {
     const limit = opts.limit ?? 10;
+    const scopes = normalizeScopeList(opts);
+    if (scopes && scopes.length === 0) return [];
+    const source = opts.source;
     if (this.db.hasVec && this.db.embedDim > 0) {
       const [qv] = await this.embeddings.embed([query]);
-      if (qv) return this.vectorSearch(qv, limit, opts);
+      if (qv) return this.vectorSearch(qv, limit, scopes, source);
     }
-    return this.keywordSearch(query, limit, opts);
+    return this.keywordSearch(query, limit, scopes, source);
   }
 
   /** Re-embed every message. Used by `dcx reindex`. Returns message count. */
@@ -180,47 +185,76 @@ export class Conversations {
     return rows.length;
   }
 
-  private vectorSearch(qv: number[], limit: number, opts: HistorySearchOptions): HistoryHit[] {
-    const filters: string[] = [];
-    if (opts.scope) filters.push('AND s.name = ?');
-    if (opts.source) filters.push('AND c.source = ?');
+  /** Vector search with adaptive widening — see store/vectorSearch.ts and
+   *  the rationale in Memories.vectorRecall. Scope and source filtering
+   *  happen during hydration in SQL, never as a post-k-NN truncation. */
+  private vectorSearch(
+    qv: number[],
+    limit: number,
+    scopes: readonly string[] | undefined,
+    source: string | undefined
+  ): HistoryHit[] {
+    return widenedVectorSearch({
+      db: this.db.raw,
+      vecTable: 'messages_vec',
+      queryVector: qv,
+      limit,
+      hydrate: (window) => this.hydrateVectorHits(window, scopes, source),
+    });
+  }
+
+  private hydrateVectorHits(
+    window: KnnCandidate[],
+    scopes: readonly string[] | undefined,
+    source: string | undefined
+  ): HistoryHit[] {
+    if (window.length === 0) return [];
+    // vec rowid == messages.id, so key the distance map by message id.
+    const distByMsg = new Map(window.map((c) => [c.rowid, c.distance]));
+    const ids = window.map((c) => c.rowid);
+    const scopeFilter = inClause('s.name', scopes);
+    const sourceSql = source ? ' AND c.source = ?' : '';
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
-             m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
-             v.distance AS distance
-      FROM messages_vec v
-      JOIN messages m ON m.id = v.rowid
+             m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts
+      FROM messages m
       JOIN conversations c ON c.id = m.conversation_id
       LEFT JOIN scopes s ON s.id = c.scope_id
-      WHERE v.embedding MATCH ? AND k = ?
-        ${filters.join(' ')}
-      ORDER BY v.distance
+      WHERE m.id IN (${ids.map(() => '?').join(', ')})${scopeFilter.sql}${sourceSql}
     `;
-    // SQL shape is bounded by the 4 scope x source combinations, so
-    // preparedCache memoizes a small, finite set of statements.
-    const stmt = cached(this.db.raw, sql);
-    const rows = (opts.scope && opts.source
-      ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope, opts.source)
-      : opts.scope
-        ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.scope)
-        : opts.source
-          ? stmt.all(VectorIndex.queryBlob(qv), limit, opts.source)
-          : stmt.all(VectorIndex.queryBlob(qv), limit)) as HitRow[];
-    return rows.map((r) => rowToHit(r, 'vector'));
+    const params = [...ids, ...scopeFilter.params, ...(source ? [source] : [])];
+    const rows = this.db.raw.prepare(sql).all(...params) as HitRow[];
+    return rows
+      .map((r) => ({ row: r, distance: distByMsg.get(r.message_id) ?? Infinity }))
+      .sort((a, b) => a.distance - b.distance)
+      .map(({ row, distance }) => {
+        const hit = rowToHit(row, 'vector');
+        hit.score = 1 / (1 + distance);
+        return hit;
+      });
   }
 
-  private keywordSearch(query: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
+  private keywordSearch(
+    query: string,
+    limit: number,
+    scopes: readonly string[] | undefined,
+    source: string | undefined
+  ): HistoryHit[] {
     const ftsQuery = buildFtsQuery(query);
     if (isFtsAvailable(this.db.raw) && ftsQuery.length > 0) {
-      return this.ftsSearch(ftsQuery, limit, opts);
+      return this.ftsSearch(ftsQuery, limit, scopes, source);
     }
-    return this.likeSearch(query, limit, opts);
+    return this.likeSearch(query, limit, scopes, source);
   }
 
-  private ftsSearch(ftsQuery: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
-    const filters: string[] = [];
-    if (opts.scope) filters.push('AND s.name = ?');
-    if (opts.source) filters.push('AND c.source = ?');
+  private ftsSearch(
+    ftsQuery: string,
+    limit: number,
+    scopes: readonly string[] | undefined,
+    source: string | undefined
+  ): HistoryHit[] {
+    const scopeFilter = inClause('s.name', scopes);
+    const sourceSql = source ? ' AND c.source = ?' : '';
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
              m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts,
@@ -229,19 +263,12 @@ export class Conversations {
       JOIN messages m ON m.id = f.rowid
       JOIN conversations c ON c.id = m.conversation_id
       LEFT JOIN scopes s ON s.id = c.scope_id
-      WHERE messages_fts MATCH ?
-        ${filters.join(' ')}
+      WHERE messages_fts MATCH ?${scopeFilter.sql}${sourceSql}
       ORDER BY f.rank
       LIMIT ?
     `;
-    const stmt = cached(this.db.raw, sql);
-    const rows = (opts.scope && opts.source
-      ? stmt.all(ftsQuery, opts.scope, opts.source, limit)
-      : opts.scope
-        ? stmt.all(ftsQuery, opts.scope, limit)
-        : opts.source
-          ? stmt.all(ftsQuery, opts.source, limit)
-          : stmt.all(ftsQuery, limit)) as (HitRow & { rank: number })[];
+    const params = [ftsQuery, ...scopeFilter.params, ...(source ? [source] : []), limit];
+    const rows = cached(this.db.raw, sql).all(...params) as (HitRow & { rank: number })[];
     return rows.map((r) => {
       const hit = rowToHit(r, 'keyword');
       hit.score = Math.min(1, 1 / (1 + Math.abs(r.rank)));
@@ -249,30 +276,26 @@ export class Conversations {
     });
   }
 
-  private likeSearch(query: string, limit: number, opts: HistorySearchOptions): HistoryHit[] {
-    const filters: string[] = [];
-    const params: unknown[] = [`%${query.toLowerCase()}%`];
-    if (opts.scope) {
-      filters.push('AND s.name = ?');
-      params.push(opts.scope);
-    }
-    if (opts.source) {
-      filters.push('AND c.source = ?');
-      params.push(opts.source);
-    }
-    params.push(limit);
+  private likeSearch(
+    query: string,
+    limit: number,
+    scopes: readonly string[] | undefined,
+    source: string | undefined
+  ): HistoryHit[] {
+    const scopeFilter = inClause('s.name', scopes);
+    const sourceSql = source ? ' AND c.source = ?' : '';
     const sql = `
       SELECT c.id, c.source, c.external_id, c.title, c.started_at, s.name AS scope_name,
              m.id AS message_id, m.role AS m_role, m.content AS m_content, m.ts AS m_ts
       FROM messages m
       JOIN conversations c ON c.id = m.conversation_id
       LEFT JOIN scopes s ON s.id = c.scope_id
-      WHERE LOWER(m.content) LIKE ?
-        ${filters.join(' ')}
+      WHERE LOWER(m.content) LIKE ?${scopeFilter.sql}${sourceSql}
       ORDER BY m.ts DESC
       LIMIT ?
     `;
-    const rows = this.db.raw.prepare(sql).all(...params) as HitRow[];
+    const params = [`%${query.toLowerCase()}%`, ...scopeFilter.params, ...(source ? [source] : []), limit];
+    const rows = cached(this.db.raw, sql).all(...params) as HitRow[];
     return rows.map((r) => rowToHit(r, 'keyword'));
   }
 }

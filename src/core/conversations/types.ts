@@ -49,6 +49,10 @@ export interface HistoryHit {
 
 export interface HistorySearchOptions {
   limit?: number;
+  /** Single scope filter (CLI ergonomics). */
   scope?: string;
+  /** Explicit scope set pushed down by the access layer; wins over
+   *  `scope`. Empty array → no readable scopes → no results. */
+  scopes?: readonly string[];
   source?: string;
 }
