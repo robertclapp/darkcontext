@@ -24,6 +24,7 @@ import { registerReindex } from './commands/reindex.js';
 import { registerExport } from './commands/export.js';
 import { registerShow } from './commands/show.js';
 import { registerVacuum } from './commands/vacuum.js';
+import { registerConnect } from './commands/connect.js';
 
 const program = new Command();
 program
@@ -50,6 +51,7 @@ registerReindex(program);
 registerExport(program);
 registerShow(program);
 registerVacuum(program);
+registerConnect(program);
 registerServe(program);
 
 program.parseAsync(process.argv).catch((err) => {

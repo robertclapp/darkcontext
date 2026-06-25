@@ -10,6 +10,8 @@ import { runForget } from '../../src/cli/commands/forget.js';
 import { runList } from '../../src/cli/commands/list.js';
 import { runReindex } from '../../src/cli/commands/reindex.js';
 import { runExport } from '../../src/cli/commands/export.js';
+import { runImportAuto } from '../../src/cli/commands/import.js';
+import { runConnect } from '../../src/cli/commands/connect.js';
 
 /**
  * CLI actions are pure functions. Each takes an output writer so tests can
@@ -177,5 +179,102 @@ describe('CLI actions (direct invocation)', () => {
     await runRemember('leak-me-please', { db: dbPath, kind: 'fact', scope: 'secret' });
     await expect(runExport({ db: dbPath, scope: '' }, () => undefined)).rejects.toThrow(/scope/);
     await expect(runExport({ db: dbPath, out: '' }, () => undefined)).rejects.toThrow(/out/);
+  });
+
+  it('runImportAuto discovers Claude Code + Codex sessions and is idempotent', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const ccRoot = join(dir, 'claude', 'projects', 'repo-x');
+    const cxRoot = join(dir, 'codex', 'sessions', '2024', '06', '01');
+    mkdirSync(ccRoot, { recursive: true });
+    mkdirSync(cxRoot, { recursive: true });
+
+    writeFileSync(
+      join(ccRoot, 'sess-1.jsonl'),
+      [
+        JSON.stringify({ type: 'user', sessionId: 'sess-1', timestamp: '2024-06-01T10:00:00Z', message: { role: 'user', content: 'how to descale espresso' } }),
+        JSON.stringify({ type: 'assistant', sessionId: 'sess-1', timestamp: '2024-06-01T10:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'citric every 60 shots' }] } }),
+      ].join('\n')
+    );
+    writeFileSync(
+      join(cxRoot, 'rollout-1.jsonl'),
+      [
+        JSON.stringify({ type: 'session_meta', payload: { id: 'codex-1' } }),
+        JSON.stringify({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'debug the race condition' }] }),
+      ].join('\n')
+    );
+
+    const cap = capture();
+    await runImportAuto({ db: dbPath, claudeCodeRoot: join(dir, 'claude', 'projects'), codexRoot: join(dir, 'codex', 'sessions') }, cap.write);
+    const joined = cap.lines.join('\n');
+    expect(joined).toMatch(/claude-code: 1 files → 1 new conversations/);
+    expect(joined).toMatch(/codex: 1 files → 1 new conversations/);
+
+    // Both sessions are now searchable across tools via history search.
+    const { AppContext } = await import('../../src/core/context.js');
+    const ctx = AppContext.open({ dbPath, embeddings: 'stub' });
+    try {
+      const hits = await ctx.conversations.search('espresso descale', { limit: 5 });
+      expect(hits.some((h) => h.source === 'claude-code')).toBe(true);
+    } finally {
+      ctx.close();
+    }
+
+    // Re-running imports nothing new (idempotent on session id).
+    const cap2 = capture();
+    await runImportAuto({ db: dbPath, claudeCodeRoot: join(dir, 'claude', 'projects'), codexRoot: join(dir, 'codex', 'sessions') }, cap2.write);
+    expect(cap2.lines.join('\n')).toMatch(/claude-code: 1 files → 0 new conversations/);
+  });
+
+  it('runImportAuto reports cleanly when no session dirs exist', async () => {
+    const cap = capture();
+    await runImportAuto({ db: dbPath, claudeCodeRoot: join(dir, 'nope-cc'), codexRoot: join(dir, 'nope-cx') }, cap.write);
+    expect(cap.lines.join('\n')).toContain('no sessions found');
+  });
+
+  it('runConnect provisions a token and prints client-specific config', async () => {
+    const cc = capture();
+    await runConnect('claude-code', { db: dbPath, scopes: 'shared' }, cc.write);
+    const ccText = cc.lines.join('\n');
+    expect(ccText).toMatch(/Provisioned 'claude-code' for claude-code/);
+    expect(ccText).toMatch(/dcx_[A-Za-z0-9_-]+/); // token present
+    expect(ccText).toMatch(/\.mcp\.json|claude mcp add-json/);
+
+    const cx = capture();
+    await runConnect('codex', { db: dbPath, scopes: 'shared' }, cx.write);
+    expect(cx.lines.join('\n')).toMatch(/\[mcp_servers\.codex\]/);
+  });
+
+  it('runConnect rejects an unknown client', async () => {
+    await expect(
+      runConnect('emacs', { db: dbPath, scopes: 'shared' }, () => undefined)
+    ).rejects.toThrow(/unknown client/);
+  });
+
+  it('runConnect --rotate reports the tool\'s real grants, not the passed flags', async () => {
+    // Provision read-write on `shared`.
+    await runConnect('cursor', { db: dbPath, scopes: 'shared' }, () => undefined);
+    // Rotate with conflicting flags: rotation keeps grants, so the output
+    // must advertise the ACTUAL boundary (shared, read-write), never the
+    // misleading `acme (read-only)` the flags would suggest.
+    const cap = capture();
+    await runConnect(
+      'cursor',
+      { db: dbPath, scopes: 'acme', readOnly: true, rotate: true },
+      cap.write
+    );
+    const text = cap.lines.join('\n');
+    expect(text).toMatch(/Rotated token for 'cursor'/);
+    expect(text).toContain('scopes: shared');
+    expect(text).not.toContain('acme');
+    expect(text).not.toContain('(read-only)');
+  });
+
+  it('runConnect --rotate provisions on first use when the tool is absent', async () => {
+    const cap = capture();
+    await runConnect('codex', { db: dbPath, scopes: 'shared', rotate: true }, cap.write);
+    // No pre-existing tool → falls through to create(), so it's a fresh
+    // provision (not a rotation) and honors the passed scopes.
+    expect(cap.lines.join('\n')).toMatch(/Provisioned 'codex' for codex/);
+    expect(cap.lines.join('\n')).toContain('scopes: shared');
   });
 });
