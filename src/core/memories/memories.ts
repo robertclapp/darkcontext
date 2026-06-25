@@ -7,9 +7,20 @@ import { inClause, widenedVectorSearch, type KnnCandidate } from '../store/vecto
 import { normalizeScopeList } from '../store/scopeList.js';
 import type { EmbeddingProvider } from '../embeddings/provider.js';
 import { NotFoundError, ValidationError } from '../errors.js';
-import { DEFAULT_MEMORY_KIND, DEFAULT_SCOPE_NAME } from '../constants.js';
+import {
+  DEDUP_CANDIDATE_K,
+  DEFAULT_DEDUP_DISTANCE,
+  DEFAULT_MEMORY_KIND,
+  DEFAULT_SCOPE_NAME,
+} from '../constants.js';
 
-import type { Memory, NewMemory, RecallHit, RecallOptions } from './types.js';
+import type {
+  Memory,
+  NewMemory,
+  RecallHit,
+  RecallOptions,
+  RememberOrMergeResult,
+} from './types.js';
 
 interface MemoryRow {
   id: number;
@@ -102,6 +113,55 @@ export class Memories {
     return tx(id) as boolean;
   }
 
+  /**
+   * Like `remember`, but first looks for a semantically near-duplicate in
+   * the same scope. If one is found (top-1 vector distance below
+   * `threshold`), that row's content is replaced with the new content,
+   * tags are unioned, and the optional `source` overwrites the existing
+   * value. No new row is inserted.
+   *
+   * Returns `{ memory, merged }` so callers can distinguish the two
+   * outcomes. Falls back to a plain insert when vector search is
+   * unavailable (no sqlite-vec, no embed dimension yet) — dedup is a
+   * best-effort quality-of-life feature, not a correctness invariant.
+   *
+   * Only considers candidates in the SAME scope as the incoming memory.
+   * Cross-scope merges would leak existence across scope boundaries,
+   * which the ScopeFilter contract forbids.
+   */
+  async rememberOrMerge(
+    input: NewMemory,
+    threshold: number = DEFAULT_DEDUP_DISTANCE
+  ): Promise<RememberOrMergeResult> {
+    if (!input.content.trim()) throw new ValidationError('content', 'must not be empty');
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      throw new ValidationError('threshold', `must be a non-negative number, got ${threshold}`);
+    }
+    // threshold === 0 is the "dedup disabled" sentinel: every candidate
+    // fails the strict `distance < threshold` gate (distances are >= 0).
+    // Skip the embedding probe entirely so a transient provider failure
+    // cannot turn an opt-out into a hard failure of the underlying insert.
+    if (threshold === 0) {
+      const memory = await this.remember(input);
+      return { memory, merged: false };
+    }
+
+    const scopeName = input.scope ?? DEFAULT_SCOPE_NAME;
+    const candidate = await this.findDuplicate(input.content, scopeName, threshold);
+    if (candidate) {
+      const merged = this.mergeInto(candidate, input);
+      // Rewrite the vector for the updated content so recall returns the
+      // new phrasing. Triggers already rewrote the FTS row on UPDATE.
+      // `replaceOne` embeds FIRST, then swaps inside one transaction — so a
+      // transient embedding failure leaves the original vector intact
+      // rather than deleting it and then failing to write the replacement.
+      await this.vectors.replaceOne(merged.id, merged.content);
+      return { memory: merged, merged: true };
+    }
+    const memory = await this.remember(input);
+    return { memory, merged: false };
+  }
+
   async recall(query: string, opts: RecallOptions = {}): Promise<RecallHit[]> {
     const limit = opts.limit ?? 10;
     const scopes = normalizeScopeList(opts);
@@ -162,6 +222,92 @@ export class Memories {
         score: 1 / (1 + distance),
         match: 'vector' as const,
       }));
+  }
+
+  /**
+   * Look for a near-duplicate of `content` within `scopeName`. Returns
+   * the candidate memory when the top vector-match distance is below
+   * `threshold`, else null.
+   *
+   * Vector-only. If vectors are unavailable we deliberately return null
+   * rather than falling back to FTS/LIKE: keyword overlap is not a
+   * reliable duplicate signal ("I love coffee" and "I hate coffee" share
+   * every non-stop word), and a false-positive merge silently deletes
+   * the user's content.
+   */
+  private async findDuplicate(
+    content: string,
+    scopeName: string,
+    threshold: number
+  ): Promise<Memory | null> {
+    if (!this.db.hasVec || this.db.embedDim === 0) return null;
+    const [qv] = await this.embeddings.embed([content]);
+    if (!qv) return null;
+    // Over-fetch K nearest neighbors, THEN keep only the closest one in the
+    // caller's scope. sqlite-vec applies `k` BEFORE the `s.name` filter, so
+    // binding `k = 1` would silently miss a real in-scope duplicate whenever
+    // a closer vector exists in another scope (same hazard RECALL_OVERFETCH
+    // works around). DEDUP_CANDIDATE_K is the overfetch budget.
+    const row = this.db.raw
+      .prepare(
+        `SELECT m.id, m.content, m.kind, m.tags_json, s.name AS scope_name,
+                m.source, m.created_at, m.updated_at, v.distance AS distance
+         FROM memories_vec v
+         JOIN memories m ON m.id = v.rowid
+         LEFT JOIN scopes s ON s.id = m.scope_id
+         WHERE v.embedding MATCH ? AND k = ? AND s.name = ?
+         ORDER BY v.distance
+         LIMIT 1`
+      )
+      .get(VectorIndex.queryBlob(qv), DEDUP_CANDIDATE_K, scopeName) as
+      | (MemoryRow & { distance: number })
+      | undefined;
+    // Strict `<`: threshold 0 disables merging entirely (no row qualifies),
+    // which is how callers signal "opt-out" without a separate flag. Real
+    // embedding providers produce distance > 0 even on identical strings
+    // due to float math, so 0.15 still catches them. Guard against a
+    // non-finite distance (NaN from a degenerate embedding) — `NaN >= t`
+    // is false, which would otherwise fall through to a destructive merge.
+    if (!row || !Number.isFinite(row.distance) || row.distance >= threshold) {
+      return null;
+    }
+    return rowToMemory(row);
+  }
+
+  /**
+   * Replace `target`'s content with `input.content`, union tags, and
+   * overwrite `source` when the caller provided one. Writes the UPDATE
+   * and returns the fresh Memory shape. Does NOT touch the vector index
+   * — the caller is responsible for rewriting it after merge.
+   *
+   * `kind` is deliberately PRESERVED from the target: dedup merges
+   * near-identical content, but the existing memory's category is not the
+   * incoming call's to change. The CLI/MCP `remember` path always supplies
+   * a `kind` (defaulting to 'fact'), so honoring `input.kind` here would
+   * silently recategorize an existing 'preference'/'event' memory into
+   * 'fact' on every dedup merge.
+   */
+  private mergeInto(target: Memory, input: NewMemory): Memory {
+    const tags = Array.from(new Set([...target.tags, ...(input.tags ?? [])]));
+    const source = input.source ?? target.source;
+    const now = Date.now();
+    this.db.raw
+      .prepare(
+        `UPDATE memories
+         SET content = ?, tags_json = ?, source = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(input.content, JSON.stringify(tags), source, now, target.id);
+    return {
+      id: target.id,
+      content: input.content,
+      kind: target.kind,
+      tags,
+      scope: target.scope,
+      source,
+      createdAt: target.createdAt,
+      updatedAt: now,
+    };
   }
 
   /**

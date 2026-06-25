@@ -59,6 +59,23 @@ export const AUDIT_REDACTION_LIMIT = 40;
  *  so operators can tell redacted strings apart in the log. */
 export const AUDIT_REDACTION_CONTEXT = 16;
 
+/** Memory dedup: vector distance below which a candidate `remember()` is
+ *  treated as a duplicate of an existing memory and merged instead of
+ *  inserted. Smaller = stricter ("only near-identical content merges").
+ *  Default tuned for cosine-ish distances from typical sentence embedding
+ *  models — override via `DARKCONTEXT_DEDUP_DISTANCE` if your embedding
+ *  provider has a different distance scale. */
+export const DEFAULT_DEDUP_DISTANCE = 0.15;
+
+/** Memory dedup: how many nearest neighbors to fetch from sqlite-vec before
+ *  the same-scope filter is applied. sqlite-vec resolves the `k` KNN across
+ *  ALL scopes first, then SQL filters by scope — so a literal `k = 1` would
+ *  miss an in-scope duplicate whenever a closer vector exists in another
+ *  scope. We over-fetch (same reasoning as RECALL_OVERFETCH_RATIO) and pick
+ *  the closest in-scope candidate. Higher = more robust against cross-scope
+ *  crowding; costs O(k) at probe time. */
+export const DEDUP_CANDIDATE_K = 50;
+
 /** MCP HTTP transport: default bind host. Localhost by design — exposing
  *  DarkContext publicly requires explicit intent (TLS + --host). */
 export const DEFAULT_HTTP_HOST = '127.0.0.1';

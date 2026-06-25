@@ -47,4 +47,16 @@ describe('loadConfig', () => {
   it('rejects an unknown provider kind with ConfigError', () => {
     expect(() => loadConfig({}, { DARKCONTEXT_EMBEDDINGS: 'mystery-engine' })).toThrow(ConfigError);
   });
+
+  it('defaults dedupDistance to 0.15 and accepts an env override', () => {
+    const defaultCfg = loadConfig({}, {});
+    expect(defaultCfg.dedupDistance).toBe(0.15);
+    const overrideCfg = loadConfig({}, { DARKCONTEXT_DEDUP_DISTANCE: '0.08' });
+    expect(overrideCfg.dedupDistance).toBe(0.08);
+  });
+
+  it('rejects a negative or non-numeric dedupDistance with ConfigError', () => {
+    expect(() => loadConfig({}, { DARKCONTEXT_DEDUP_DISTANCE: '-1' })).toThrow(ConfigError);
+    expect(() => loadConfig({}, { DARKCONTEXT_DEDUP_DISTANCE: 'nope' })).toThrow(ConfigError);
+  });
 });

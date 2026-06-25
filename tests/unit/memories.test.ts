@@ -70,4 +70,124 @@ describe('Memories', () => {
     expect(hits.length).toBe(1);
     expect(hits[0]!.match).toBe('keyword');
   });
+
+  describe('rememberOrMerge', () => {
+    it('merges near-duplicate content into the existing row (same scope)', async () => {
+      const first = await memories.remember({ content: 'Espresso descaling every 60 shots' });
+      const res = await memories.rememberOrMerge({
+        content: 'Espresso descaling every 60 shots',
+        tags: ['coffee'],
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(first.id);
+      expect(res.memory.tags).toEqual(['coffee']);
+      expect(memories.list()).toHaveLength(1);
+    });
+
+    it('inserts a fresh row when no candidate is within the distance threshold', async () => {
+      await memories.remember({ content: 'Espresso descaling every 60 shots' });
+      const res = await memories.rememberOrMerge({
+        content: 'Completely unrelated tennis forehand tip',
+      });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('unions tags and keeps the newest content when merging', async () => {
+      const first = await memories.remember({
+        content: 'Descale every 60 shots',
+        tags: ['coffee'],
+      });
+      const res = await memories.rememberOrMerge({
+        content: 'Descale every 60 shots',
+        tags: ['maintenance'],
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(first.id);
+      expect(res.memory.tags.sort()).toEqual(['coffee', 'maintenance']);
+    });
+
+    it('does not merge across scope boundaries', async () => {
+      await memories.remember({ content: 'shared phrase', scope: 'work' });
+      const res = await memories.rememberOrMerge({
+        content: 'shared phrase',
+        scope: 'personal',
+      });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+      expect(memories.list({ scope: 'work' })).toHaveLength(1);
+      expect(memories.list({ scope: 'personal' })).toHaveLength(1);
+    });
+
+    it('falls back to a plain insert when vectors are unavailable', async () => {
+      await memories.remember({ content: 'existing fact' });
+      (db as { hasVec: boolean }).hasVec = false;
+      const res = await memories.rememberOrMerge({ content: 'existing fact' });
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('respects the threshold: a tiny threshold disables merging', async () => {
+      await memories.remember({ content: 'repeat fact' });
+      const res = await memories.rememberOrMerge({ content: 'repeat fact' }, 0);
+      expect(res.merged).toBe(false);
+      expect(memories.list()).toHaveLength(2);
+    });
+
+    it('rejects a negative threshold', async () => {
+      await expect(
+        memories.rememberOrMerge({ content: 'x' }, -1)
+      ).rejects.toThrow(/non-negative/);
+    });
+
+    it('preserves the existing memory kind on merge (does not recategorize)', async () => {
+      const first = await memories.remember({
+        content: 'Prefers oat milk',
+        kind: 'preference',
+      });
+      // The CLI/MCP path always supplies a kind (default 'fact'); a merge
+      // must not silently flip the stored 'preference' to 'fact'.
+      const res = await memories.rememberOrMerge({
+        content: 'Prefers oat milk',
+        kind: 'fact',
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(first.id);
+      expect(res.memory.kind).toBe('preference');
+      expect(memories.getById(first.id).kind).toBe('preference');
+    });
+
+    it('merges the closest in-scope duplicate even when a nearer vector exists in another scope', async () => {
+      // Same content lives in two scopes. With sqlite-vec, a literal k=1
+      // KNN could return the other-scope row first and then drop it via the
+      // scope filter, leaving the genuine same-scope duplicate unmerged.
+      // The overfetch (DEDUP_CANDIDATE_K) must surface the in-scope row.
+      const personal = await memories.remember({
+        content: 'Espresso descaling cadence is 60 shots',
+        scope: 'personal',
+      });
+      const work = await memories.remember({
+        content: 'Espresso descaling cadence is 60 shots',
+        scope: 'work',
+      });
+      const res = await memories.rememberOrMerge({
+        content: 'Espresso descaling cadence is 60 shots',
+        scope: 'work',
+      });
+      expect(res.merged).toBe(true);
+      expect(res.memory.id).toBe(work.id);
+      // The personal-scope row is untouched and no new work row was added.
+      expect(memories.list({ scope: 'work' })).toHaveLength(1);
+      expect(memories.list({ scope: 'personal' })).toHaveLength(1);
+      expect(memories.getById(personal.id).scope).toBe('personal');
+    });
+
+    it('merged memory remains vector-recallable under its new phrasing', async () => {
+      const first = await memories.remember({ content: 'tennis grip is eastern' });
+      const res = await memories.rememberOrMerge({ content: 'tennis grip is eastern' });
+      expect(res.merged).toBe(true);
+      const hits = await memories.recall('tennis grip', { limit: 5 });
+      expect(hits.some((h) => h.memory.id === first.id)).toBe(true);
+    });
+  });
 });

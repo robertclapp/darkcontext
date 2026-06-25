@@ -1,4 +1,10 @@
-import type { Memories, Memory, NewMemory, RecallHit } from '../core/memories/index.js';
+import type {
+  Memories,
+  Memory,
+  NewMemory,
+  RecallHit,
+  RememberOrMergeResult,
+} from '../core/memories/index.js';
 import type {
   Documents,
   DocumentChunkHit,
@@ -94,6 +100,28 @@ export class ScopeFilter {
   async remember(input: NewMemory): Promise<Memory> {
     const scope = this.requireWritableScope(input.scope);
     return this.memories.remember({ ...input, scope });
+  }
+
+  /**
+   * Dedup-aware remember. Requires BOTH read and write access on the
+   * resolved scope. The read requirement isn't bureaucracy: the merge
+   * outcome (and its returned id/kind/tags) reveals whether a near
+   * duplicate already lives in the scope, which is an existence/content
+   * oracle a write-only tool would otherwise use to probe content it
+   * cannot `recall`. When the caller has write-only access we silently
+   * fall back to a plain insert — the user-visible behavior ("you wrote a
+   * memory") is unchanged, only the dedup short-circuit is denied.
+   */
+  async rememberOrMerge(
+    input: NewMemory,
+    threshold?: number
+  ): Promise<RememberOrMergeResult> {
+    const scope = this.requireWritableScope(input.scope);
+    if (!this.hasReadAccess(scope)) {
+      const memory = await this.memories.remember({ ...input, scope });
+      return { memory, merged: false };
+    }
+    return this.memories.rememberOrMerge({ ...input, scope }, threshold);
   }
 
   async recall(query: string, opts: { limit?: number; scope?: string } = {}): Promise<RecallHit[]> {
